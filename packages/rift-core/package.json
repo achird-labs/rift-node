@@ -1,6 +1,6 @@
 {
   "name": "@rift-vs/rift",
-  "version": "0.15.0",
+  "version": "0.15.1",
   "description": "Official Node.js / TypeScript SDK for Rift - a high-performance, Mountebank-compatible HTTP/HTTPS mock server",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

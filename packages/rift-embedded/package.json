@@ -1,6 +1,6 @@
 {
   "name": "@rift-vs/rift-embedded",
-  "version": "0.15.0",
+  "version": "0.15.1",
   "description": "Embedded (in-process) engine transport for @rift-vs/rift — koffi FFI binding to librift_ffi. Installing this package is what opts a project into rift.embedded().",
   "type": "module",
   "main": "dist/index.js",
