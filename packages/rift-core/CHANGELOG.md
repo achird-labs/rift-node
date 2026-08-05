@@ -5,6 +5,46 @@ All notable changes to `@rift-vs/rift` are documented here. This project adheres
 
 ## Unreleased
 
+### Fixed
+
+- **`intercept.serve()` now conforms to the engine's serve-stub wire contract** (issue #101).
+  `serve()` used to embed a Mountebank-shaped response verbatim, so the everyday
+  `serve(host, okJson({ ok: true }))` posted an **object** `body` where the engine's `ServeStub`
+  declares `Option<String>`. The engine parses rules through an untagged enum, so this came back as
+  `Invalid intercept rule JSON: data did not match any variant of untagged enum RuleOrRules` —
+  a message that names neither the field nor the reason.
+
+  The response is now normalized before it goes on the wire: a non-string `body` becomes compact
+  JSON, a numeric-string `statusCode` is coerced to a number, and `_mode: 'text'` plus unknown keys
+  are dropped. A string `body` is still sent verbatim and is never double-encoded. Body key order
+  follows your object, whereas the imposter path re-serializes through Rust and emits sorted keys —
+  the two are equivalent JSON but not identical bytes, which matters only to a SUT that hashes or
+  byte-asserts the body.
+
+  What the engine cannot represent is now refused with `InvalidDefinition` naming the field, rather
+  than silently mangled: a **multi-value header** (joining would corrupt `Set-Cookie`), a **binary
+  or unrecognized `_mode`** (the base64 would have been served as literal text), and a `statusCode`
+  outside **100..999**. That bound is what the engine can render as a status line rather than the
+  `u16` the field can hold: it writes the line with `format!` and an empty reason phrase for codes
+  hyper rejects, so admitting the full `u16` *would* let `''`, `null` or `true` through as `0` and
+  emit a literal `HTTP/1.1 0` that the SUT's own HTTP client cannot parse — trading this issue's
+  opaque serde error for an equally opaque one downstream. Parsing is strict for the same reason:
+  only a number or an all-digits string is accepted, where `Number()` would have read `'0x1F4'` as
+  500 and `'1e3'` as 1000. Use `forward()` to an imposter when you need any of the refused cases, or
+  `addRule()` to send a rule verbatim.
+
+  Note that the engine still silently drops hop-by-hop headers and any header whose value contains
+  CR/LF; `serve()` does not refuse those, so they simply do not arrive.
+
+  `InterceptRule['action']` is typed `{ serve: ServeStub }` (newly exported) instead of
+  `{ serve: IsResponse }`, so the raw `addRule()` path catches the same mismatch at compile time.
+  This is a type-level narrowing: code it now rejects was already failing at runtime.
+
+  This affects the spawn and remote transports; CI never caught it because the spawn-lane integration
+  specs self-skip without an engine binary. The new coverage is in the unit lane, which always runs.
+  Widening the engine side for raw REST callers is tracked as achird-labs/rift#933 and is not needed
+  for this fix.
+
 ### Security
 
 - **A blank admin `apiKey` is now rejected** (issue #96). `rift.spawn({ apiKey })`,

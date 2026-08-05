@@ -203,7 +203,18 @@ export interface InterceptHandle {
   readonly port: number;
 
   /** `string` match = host shorthand (`{host, action:{serve}}`); a `Predicate[]` match is AND-ed
-   * over the decrypted request (`{predicates, action:{serve}}`). */
+   * over the decrypted request (`{predicates, action:{serve}}`).
+   *
+   * The response is normalized to the engine's narrower `ServeStub` (issue #101): a non-string body
+   * becomes compact JSON (`okJson({a:1})` sends `'{"a":1}'`), a numeric-string `statusCode` is
+   * coerced to a number, and `_mode: 'text'` plus unknown keys are dropped. What the engine cannot
+   * represent is refused rather than silently mangled — a multi-value header (joining would corrupt
+   * `Set-Cookie`), a binary body (the base64 would be served as literal text), and a `statusCode`
+   * outside the 100..999 the engine can render as a status line. Use `forward()` to an imposter when
+   * you need any of those, or `addRule()` to send a rule verbatim.
+   *
+   * Body key order follows your object; the imposter path re-serializes through Rust and emits
+   * sorted keys, so the two differ byte-wise for a SUT that hashes or byte-asserts the body. */
   serve(match: string | Predicate[], response: ResponseBuilder | IsResponse): Promise<void>;
   /** `to` is either a real imposter (its `.port` is used) or a raw port number. */
   forward(match: string | Predicate[], to: ImposterHandle | number): Promise<void>;

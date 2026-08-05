@@ -16,9 +16,10 @@ import fs from 'fs/promises';
 import os from 'os';
 import path from 'path';
 import { Engine, type AdminApi, type ImposterHandle } from '../../src/engine.js';
-import { okJson, created, req } from '../../src/dsl/index.js';
+import { ok, okJson, created, req } from '../../src/dsl/index.js';
+import type { ResponseBuilder } from '../../src/dsl/response.js';
 import { InterceptUnavailable, InvalidDefinition } from '../../src/errors.js';
-import type { InterceptRule } from '../../src/model/index.js';
+import type { InterceptRule, IsResponse } from '../../src/model/index.js';
 import type { InterceptBackend } from '../../src/intercept/types.js';
 import { buildSpawnArgs } from '../../src/spawn/index.js';
 import { connect } from '../../src/remote/client.js';
@@ -100,7 +101,13 @@ describe('issue #11 — intercept rule building (wire snapshots)', () => {
     expect(rules).toEqual([
       {
         host: 'cdn.example.com',
-        action: { serve: { statusCode: 200, headers: { 'Content-Type': 'application/json' }, body: { stub: true } } },
+        action: {
+          serve: {
+            statusCode: 200,
+            headers: { 'Content-Type': 'application/json' },
+            body: '{"stub":true}',
+          },
+        },
       },
     ]);
   });
@@ -165,6 +172,111 @@ describe('issue #11 — intercept rule building (wire snapshots)', () => {
     await expect(handle.serve('x.example.com', proxyTo('http://origin.example.com'))).rejects.toThrow(
       InvalidDefinition
     );
+  });
+});
+
+describe('issue #101 — serve() normalizes the response into the engine ServeStub wire shape', () => {
+  /** The `action.serve` object as it actually goes over the wire — parsed back from the JSON the
+   * backend received, so these assertions see exactly what serde will. */
+  async function serveWire(response: ResponseBuilder | IsResponse): Promise<Record<string, unknown>> {
+    const fake = new FakeInterceptBackend();
+    const { engine } = engineOf(fake);
+    const handle = await engine.intercept();
+    await handle.serve('x.example.com', response);
+    const rules = JSON.parse(fake.addRulesCalls[0] as string) as InterceptRule[];
+    return (rules[0]?.action as { serve: Record<string, unknown> }).serve;
+  }
+
+  async function serveRejects(response: ResponseBuilder | IsResponse): Promise<void> {
+    const fake = new FakeInterceptBackend();
+    const { engine } = engineOf(fake);
+    const handle = await engine.intercept();
+    await expect(handle.serve('x.example.com', response)).rejects.toThrow(InvalidDefinition);
+  }
+
+  it('stringifies an object body — engine ServeStub.body is Option<String>', async () => {
+    expect(await serveWire(okJson({ stub: true }))).toEqual({
+      statusCode: 200,
+      headers: { 'Content-Type': 'application/json' },
+      body: '{"stub":true}',
+    });
+  });
+
+  it('stringifies array, number and boolean bodies the same compact way', async () => {
+    expect((await serveWire({ body: [1, 2] })).body).toBe('[1,2]');
+    expect((await serveWire({ body: 42 })).body).toBe('42');
+    expect((await serveWire({ body: false })).body).toBe('false');
+  });
+
+  it('passes a string body through verbatim — never double-encoded', async () => {
+    expect((await serveWire({ body: '{"already":"json"}' })).body).toBe('{"already":"json"}');
+    expect((await serveWire({ body: 'plain text' })).body).toBe('plain text');
+  });
+
+  it('omits an absent or null body rather than sending a null', async () => {
+    expect(await serveWire({ statusCode: 204 })).toEqual({ statusCode: 204 });
+    expect(await serveWire({ statusCode: 204, body: null })).toEqual({ statusCode: 204 });
+  });
+
+  it('coerces a numeric-string statusCode to a number — engine status_code is u16', async () => {
+    expect((await serveWire({ statusCode: '404' })).statusCode).toBe(404);
+  });
+
+  it('rejects a statusCode outside the 100..999 the engine can render as a status line', async () => {
+    await serveRejects({ statusCode: 'not-a-number' });
+    await serveRejects({ statusCode: 200.5 });
+    await serveRejects({ statusCode: 70000 });
+    await serveRejects({ statusCode: -1 });
+    // Boundaries: the engine writes `HTTP/1.1 <code> <reason>` with an empty reason for anything
+    // hyper's StatusCode::from_u16 rejects, so 99/1000 would emit an unparseable status line.
+    await serveRejects({ statusCode: 99 });
+    await serveRejects({ statusCode: 1000 });
+    expect((await serveWire({ statusCode: 100 })).statusCode).toBe(100);
+    expect((await serveWire({ statusCode: 999 })).statusCode).toBe(999);
+  });
+
+  it('rejects the values Number() would quietly turn into a real status code', async () => {
+    // Number('') === 0, Number(true) === 1, Number('0x1F4') === 500, Number('1e3') === 1000 — each
+    // would have passed a u16 range check and produced a status the caller never asked for.
+    await serveRejects({ statusCode: '' as unknown as number });
+    await serveRejects({ statusCode: '   ' as unknown as number });
+    await serveRejects({ statusCode: true as unknown as number });
+    await serveRejects({ statusCode: [] as unknown as number });
+    await serveRejects({ statusCode: '0x1F4' });
+    await serveRejects({ statusCode: '1e3' });
+  });
+
+  it('rejects a null statusCode rather than quietly answering the engine default', async () => {
+    // Unlike `body`, whose `JsonValue` type includes null, `statusCode` is `number | string` — so a
+    // null is out of contract and must not resolve to a status the caller never asked for.
+    await serveRejects({ statusCode: null as unknown as number, body: 'x' });
+  });
+
+  it('rejects an unrecognized _mode instead of falling through to the text path', async () => {
+    await serveRejects({ _mode: 'BINARY' as unknown as 'binary' });
+    await serveRejects({ _mode: 'base64' as unknown as 'binary' });
+  });
+
+  it('rejects a multi-value header instead of silently joining it', async () => {
+    await serveRejects({ headers: { 'Set-Cookie': ['a=1', 'b=2'] } });
+  });
+
+  it('rejects binary mode rather than serving the base64 as literal text', async () => {
+    await serveRejects(ok().binaryBody(Buffer.from([0, 1, 2])));
+    await serveRejects({ _mode: 'binary', body: 'AAEC' });
+  });
+
+  it("drops _mode:'text' and unknown keys, and does not mutate the caller's response", async () => {
+    const response: IsResponse = { statusCode: 200, body: 'hi', _mode: 'text', _behaviors: { wait: 5 } };
+    const before = JSON.parse(JSON.stringify(response)) as IsResponse;
+    expect(await serveWire(response)).toEqual({ statusCode: 200, body: 'hi' });
+    expect(response).toEqual(before);
+  });
+
+  it('reports an unserializable body as InvalidDefinition, not a raw TypeError', async () => {
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+    await serveRejects({ body: circular as never });
   });
 });
 
