@@ -19,6 +19,7 @@ import {
   ImposterNotFound,
   EngineError,
 } from '../../src/remote/index.js';
+import { WireValidationError } from '../../src/errors.js';
 
 type FetchArgs = { url: string; method: string; body: unknown };
 
@@ -332,5 +333,84 @@ describe('remote — blank apiKey is rejected (issue #96)', () => {
     const init = (fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1];
     const headers = (init.headers ?? {}) as Record<string, string>;
     expect(headers['authorization']).toBeUndefined();
+  });
+});
+
+describe('issue #112 — outbound wire bodies are JSON-safe on every admin route', () => {
+  /** Every assertion here checks the request was NEVER SENT. A rejection that still put the body on
+   * the wire would leave the engine holding the `null` this guard exists to prevent. */
+  async function rejectsWithoutSending(call: (c: RemoteClient) => Promise<unknown>): Promise<void> {
+    const fn = mockFetch(json({}));
+    const c = connect(BASE);
+    await expect(call(c)).rejects.toThrow(WireValidationError);
+    expect(fn).not.toHaveBeenCalled();
+  }
+
+  it('createImposter refuses a non-finite number nested in a stub body', async () => {
+    await rejectsWithoutSending((c) =>
+      c.createImposter({
+        port: 4545,
+        protocol: 'http',
+        stubs: [{ responses: [{ is: { body: { temperature: NaN } } } as never] }],
+      })
+    );
+  });
+
+  it('replaceImposters refuses a non-finite number', async () => {
+    await rejectsWithoutSending((c) =>
+      c.replaceImposters({
+        imposters: [{ port: 1, protocol: 'http', stubs: [{ responses: [{ is: { body: { n: Infinity } } } as never] }] }],
+      })
+    );
+  });
+
+  it('addStub and updateStub refuse a non-finite number', async () => {
+    await rejectsWithoutSending((c) =>
+      c.addStub(4545, { responses: [{ is: { body: { n: -Infinity } } } as never] })
+    );
+    await rejectsWithoutSending((c) =>
+      c.updateStub(4545, 0, { responses: [{ is: { body: { n: NaN } } } as never] })
+    );
+  });
+
+  it('setFlowState refuses a non-finite value — flow state is caller data too', async () => {
+    await rejectsWithoutSending((c) => c.setFlowState(4545, 'flow', 'key', NaN));
+  });
+
+  it('refuses a bigint with a typed error rather than a raw TypeError', async () => {
+    const fn = mockFetch(json({}));
+    const c = connect(BASE);
+    const thrown = await c
+      .createImposter({ port: 1, protocol: 'http', meta: 1n } as never)
+      .catch((e: unknown) => e);
+    expect(thrown).toBeInstanceOf(WireValidationError);
+    expect(thrown).not.toBeInstanceOf(TypeError);
+    expect(fn).not.toHaveBeenCalled();
+  });
+
+  it('reports a circular reference as WireValidationError, not a bare TypeError', async () => {
+    const circular: Record<string, unknown> = { port: 1, protocol: 'http' };
+    circular.self = circular;
+    const fn = mockFetch(json({}));
+    const c = connect(BASE);
+    const thrown = await c.createImposter(circular as never).catch((e: unknown) => e);
+    expect(thrown).toBeInstanceOf(WireValidationError);
+    expect(fn).not.toHaveBeenCalled();
+  });
+
+  it('names the offending key so the caller can locate it', async () => {
+    const c = connect(BASE);
+    mockFetch(json({}));
+    await expect(
+      c.createImposter({ port: 1, protocol: 'http', stubs: [{ responses: [{ is: { body: { temperature: NaN } } } as never] }] })
+    ).rejects.toThrow(/temperature/);
+  });
+
+  it('leaves a valid body byte-identical to the unguarded serialization', async () => {
+    const fn = mockFetch(json({ port: 4545, protocol: 'http' }, 201));
+    const def = { port: 4545, protocol: 'http', stubs: [] };
+    await connect(BASE).createImposter(def);
+    const [, init] = fn.mock.calls[0] as unknown as [string, RequestInit];
+    expect(init.body).toBe(JSON.stringify(def));
   });
 });

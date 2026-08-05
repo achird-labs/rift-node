@@ -7,6 +7,26 @@ All notable changes to `@rift-vs/rift` are documented here. This project adheres
 
 ### Fixed
 
+- **Every outbound admin payload is now JSON-safe, on both transports** (issue #112). The wire
+  serializer documented a guarantee — a non-finite number is refused rather than silently emitted as
+  `null`, a `bigint`/function/symbol raises a typed `WireValidationError` rather than a raw
+  `TypeError` or a silent drop — and enforced it only in `toWireString()`/`toWireJson()`, which no
+  production path called. Every real admin call went through a bare `JSON.stringify`, so
+  `engine.create({ ..., body: { temperature: NaN } })` put `null` on the wire: the SUT received a
+  value the caller never wrote, with nothing SDK-side to correlate against.
+
+  Serialization now funnels through one `stringifyJsonSafe()`, applied at the transport boundary
+  rather than per-method: `RemoteClient` serializes **every** outbound body through it (a route
+  allow-list is something a new method silently falls off, and flow-state values are caller data
+  too), and the embedded transport routes all eight of its FFI payloads through the same helper.
+  `intercept()`'s own options are guarded as well — a non-finite `port` previously reached the
+  embedded FFI as `null` and left the remote/spawn backend reporting a handle at `http://host:null`.
+  A valid payload serializes byte-identically to before.
+
+  Refusals surface as `WireValidationError`, whose `path` names the offending key. This differs from
+  the intercept rule path (issue #111), which wraps the same failure as `InvalidDefinition` — issue
+  #101 fixed that surface to a single error type and it stays that way.
+
 - **`intercept.addRule()` now refuses values JSON cannot represent** (issue #111). Intercept rules
   were serialized with a bare `JSON.stringify`, so a non-finite number anywhere in a rule — a
   `predicates` value on the ergonomic `serve()`/`forward()` path, or a hand-built

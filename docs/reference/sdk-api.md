@@ -250,7 +250,7 @@ class ImposterNotFound extends RiftError         // 404
 class EngineError extends RiftError              // other engine failure; .code
 class EngineUnavailable extends RiftError        // spawn/connect/load failure; .cause
 class CommunicationError extends RiftError       // transport-level (HTTP/FFI)
-class WireValidationError extends RiftError      // fromJson shape errors; .path
+class WireValidationError extends RiftError      // wire codec, in and out; .path
 class VerificationError extends RiftError        // verify() miss; .expected .count .recorded .closest
 class UnsupportedPredicateError extends RiftError// client-side verify hit xpath/inject
 class EngineVersionError extends RiftError       // preflight: engine < minEngineVersion; .found .required
@@ -260,6 +260,14 @@ class InterceptUnavailable extends RiftError     // intercept not started/starta
 
 All SDK-thrown errors are `RiftError` subclasses (the compat `create()` keeps its historical plain
 `Error`s). `WireValidationError` sits under `RiftError` like the rest (re-parented in #25).
+
+`WireValidationError` guards both directions. Inbound it reports a malformed shape from `fromJson`;
+outbound (issue #112) every admin payload — imposters, stubs, flow-state values, `intercept()`
+options — is refused before it is sent if JSON cannot represent it honestly: a non-finite number
+(`JSON.stringify` would emit `null`), a `bigint`, a function or a symbol. `.path` names the offending
+key. The request is never sent, so a refusal leaves no partial state on the engine. Intercept *rules*
+are the one exception to the type: `serve()`/`forward()`/`addRule()` report the same failure as
+`InvalidDefinition`, because issue #101 fixed that surface to a single error type.
 
 ## 5. DSL — full grammar
 
