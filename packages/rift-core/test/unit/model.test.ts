@@ -367,4 +367,60 @@ describe('wire model — serialization is JSON-safe (no silent loss)', () => {
     model.self = model;
     expect(() => toWireJson(model as unknown as ImpostersConfig)).toThrow(WireValidationError);
   });
+
+  it('throws a typed error naming the offending key on a non-finite number (issue #106)', () => {
+    for (const bad of [NaN, Infinity, -Infinity]) {
+      const model = {
+        imposters: [{ protocol: 'http', _rift: { temperature: bad } }],
+      } as unknown as ImpostersConfig;
+      let caught: unknown;
+      try {
+        toWireString(model);
+      } catch (e) {
+        caught = e;
+      }
+      expect(caught).toBeInstanceOf(WireValidationError);
+      expect((caught as WireValidationError).path).toContain('temperature');
+      // The message must distinguish NaN from Infinity from -Infinity — "not serializable" alone
+      // does not tell the caller which value they wrote.
+      expect((caught as WireValidationError).message).toContain(String(bad));
+    }
+  });
+
+  it('locates a non-finite array element by its index, and throws via toWireJson too (issue #106)', () => {
+    const model = {
+      imposters: [{ protocol: 'http', _rift: { readings: [1, Infinity] } }],
+    } as unknown as ImpostersConfig;
+    let caught: unknown;
+    try {
+      toWireJson(model);
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(WireValidationError);
+    // JSON.stringify hands the replacer the array index as the key, so that is the locator.
+    expect((caught as WireValidationError).path).toBe('…1');
+  });
+
+  it('throws on a root-level non-finite value with the root path (issue #106)', () => {
+    let caught: unknown;
+    try {
+      toWireString(NaN as unknown as ImpostersConfig);
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(WireValidationError);
+    expect((caught as WireValidationError).path).toBe('$');
+  });
+
+  it('leaves finite numbers untouched — including 0, -0 and MAX_VALUE (issue #106)', () => {
+    const model = {
+      imposters: [{ protocol: 'http', _rift: { zero: 0, negZero: -0, max: Number.MAX_VALUE, n: 42 } }],
+    } as unknown as ImpostersConfig;
+    const json = toWireString(model);
+    expect(json).toContain('"zero":0');
+    expect(json).toContain('"negZero":0');
+    expect(json).toContain(`"max":${Number.MAX_VALUE}`);
+    expect(json).toContain('"n":42');
+  });
 });

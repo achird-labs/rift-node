@@ -278,6 +278,31 @@ describe('issue #101 — serve() normalizes the response into the engine ServeSt
     circular.self = circular;
     await serveRejects({ body: circular as never });
   });
+
+  it('rejects a non-finite number in the body instead of serving it as null (issue #106)', async () => {
+    await serveRejects({ body: { n: NaN } });
+    await serveRejects({ body: { n: Infinity } });
+    await serveRejects({ body: [1, -Infinity] });
+    await serveRejects({ body: NaN });
+  });
+
+  it('names the offending key when it rejects a non-finite body value (issue #106)', async () => {
+    const fake = new FakeInterceptBackend();
+    const { engine } = engineOf(fake);
+    const handle = await engine.intercept();
+    await expect(handle.serve('x.example.com', { body: { temperature: NaN } })).rejects.toThrow(
+      /temperature/
+    );
+  });
+
+  it('rejects a function or symbol in the body rather than dropping it (issue #106)', async () => {
+    // Sharing the wire-model replacer tightened this path: JSON.stringify used to drop a
+    // function-valued key outright and null one inside an array. Pinned so a future refactor of
+    // toBody() cannot quietly restore the silent-drop behaviour.
+    await serveRejects({ body: { cb: (() => 1) as never } });
+    await serveRejects({ body: [1, (() => 1) as never] });
+    await serveRejects({ body: { s: Symbol('x') as never } });
+  });
 });
 
 describe('issue #11 — InterceptHandle surface', () => {

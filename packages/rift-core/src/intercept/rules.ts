@@ -6,6 +6,7 @@
 
 import type { InterceptRule, IsResponse, JsonValue, Predicate, ServeStub } from '../model/index.js';
 import { InvalidDefinition } from '../errors.js';
+import { jsonSafeReplacer } from '../model/serialize.js';
 import { ResponseBuilder } from '../dsl/response.js';
 import type { ImposterHandle } from '../engine.js';
 
@@ -72,12 +73,16 @@ function toHeaders(headers: NonNullable<IsResponse['headers']>): Record<string, 
 /** A string body is the engine's own contract and is sent as-is; anything else becomes compact JSON.
  * Key order follows the object's own — the engine's imposter path re-serializes through
  * `serde_json::Map` (a `BTreeMap`, since `preserve_order` is off) and so emits sorted keys, which a
- * SUT that hashes or byte-asserts the body will notice. */
+ * SUT that hashes or byte-asserts the body will notice.
+ *
+ * Serialized through the wire model's own {@link jsonSafeReplacer} so this path refuses exactly what
+ * that one refuses (issue #106) — the thrown `WireValidationError` already names the offending key,
+ * and the catch below re-wraps it as `InvalidDefinition` to keep `serve()`'s error contract uniform. */
 function toBody(body: JsonValue): string {
   if (typeof body === 'string') return body;
   let encoded: string | undefined;
   try {
-    encoded = JSON.stringify(body);
+    encoded = JSON.stringify(body, jsonSafeReplacer);
   } catch (cause) {
     throw new InvalidDefinition(
       `intercept serve() body could not be serialized to JSON: ${cause instanceof Error ? cause.message : String(cause)}`,
