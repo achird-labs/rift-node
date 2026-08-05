@@ -7,6 +7,25 @@ All notable changes to `@rift-vs/rift` are documented here. This project adheres
 
 ### Fixed
 
+- **`intercept.addRule()` now refuses values JSON cannot represent** (issue #111). Intercept rules
+  were serialized with a bare `JSON.stringify`, so a non-finite number anywhere in a rule — a
+  `predicates` value on the ergonomic `serve()`/`forward()` path, or a hand-built
+  `action.serve.statusCode` on the `addRule()` escape hatch — reached the engine as `null`. The rule
+  then matched, or answered, something the caller never wrote, with nothing on the SDK side to
+  correlate against. A `bigint` threw a raw unwrapped `TypeError`, and a function or symbol was
+  dropped silently.
+
+  Serialization now runs through the wire model's `jsonSafeReplacer`, the same guard issue #106
+  applied to `serve()` response bodies, and the refusal is re-wrapped as `InvalidDefinition` with the
+  underlying `WireValidationError` as its `cause` — `serve()`, `forward()` and `redirectTo()` all
+  funnel through `addRule()`, and issue #101 established that everything the intercept path refuses
+  surfaces as that one type. A valid rule serializes byte-identically to before.
+
+  This could not be fixed at the transport instead: `RemoteClient.interceptAddRules()` re-parses the
+  serialized rule, by which point a `NaN` has already become an honest `null`. `addRule()` remains
+  the verbatim escape hatch in every other respect — it still applies no `ServeStub` normalization
+  and does **not** range-check a finite `statusCode`.
+
 - **compat `create()` now validates the `MB_APIKEY` it hands the child** (issue #108). `create()`
   spawns the engine with no `env` of its own, so the child inherits `process.env` wholesale — which
   makes an ambient `MB_APIKEY` engine configuration whether or not the caller thought of it that way

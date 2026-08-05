@@ -50,6 +50,7 @@ import { computeClosest, evalPredicates } from './verify/eval.js';
 import type { InterceptBackend, InterceptOptions } from './intercept/types.js';
 import { RemoteInterceptBackend } from './intercept/remote-backend.js';
 import { forwardRule, redirectRule, serveRule } from './intercept/rules.js';
+import { jsonSafeReplacer } from './model/serialize.js';
 
 // --- shared small types ----------------------------------------------------------------------
 
@@ -220,7 +221,12 @@ export interface InterceptHandle {
   forward(match: string | Predicate[], to: ImposterHandle | number): Promise<void>;
   /** A catch-all forward rule — no `host`/`predicates` — routing whatever no more specific rule did. */
   redirectTo(imposter: ImposterHandle): Promise<void>;
-  /** Raw escape hatch: add one or more rules verbatim. */
+  /** Raw escape hatch: add one or more rules verbatim — no normalization, unlike `serve()`.
+   *
+   * "Verbatim" stops at what JSON can represent: a value `JSON.stringify` cannot encode honestly is
+   * refused with `InvalidDefinition` rather than sent (issue #111). A non-finite `statusCode` or
+   * predicate value would otherwise reach the engine as a `null` you never wrote. A finite but
+   * nonsensical `statusCode` is still your business — this hatch does not range-check. */
   addRule(rule: InterceptRule | InterceptRule[]): Promise<void>;
   rules(): Promise<InterceptRule[]>;
   clearRules(): Promise<void>;
@@ -640,9 +646,25 @@ class InterceptHandleImpl implements InterceptHandle {
     await this.addRule(redirectRule(imposter));
   }
 
+  /** Serialized through the wire model's own {@link jsonSafeReplacer} (issue #111) so a rule is
+   * refused here rather than arriving at the engine with a `null` the caller never wrote — a
+   * non-finite `statusCode` or predicate value is otherwise nulled silently by `JSON.stringify`,
+   * and the transport cannot catch it because `interceptAddRules` re-parses this string after the
+   * damage is done. Re-wrapped as `InvalidDefinition` (as `toBody()` does) because `serve()`,
+   * `forward()` and `redirectTo()` all funnel through here and issue #101 fixed their refusals to
+   * that one type. */
   async addRule(rule: InterceptRule | InterceptRule[]): Promise<void> {
     const rules = Array.isArray(rule) ? rule : [rule];
-    await this.backend.addRules(JSON.stringify(rules));
+    let json: string;
+    try {
+      json = JSON.stringify(rules, jsonSafeReplacer);
+    } catch (cause) {
+      throw new InvalidDefinition(
+        `intercept rule could not be serialized to JSON: ${cause instanceof Error ? cause.message : String(cause)}`,
+        { cause }
+      );
+    }
+    await this.backend.addRules(json);
   }
 
   async rules(): Promise<InterceptRule[]> {

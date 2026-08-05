@@ -18,7 +18,7 @@ import path from 'path';
 import { Engine, type AdminApi, type ImposterHandle } from '../../src/engine.js';
 import { ok, okJson, created, req } from '../../src/dsl/index.js';
 import type { ResponseBuilder } from '../../src/dsl/response.js';
-import { InterceptUnavailable, InvalidDefinition } from '../../src/errors.js';
+import { InterceptUnavailable, InvalidDefinition, WireValidationError } from '../../src/errors.js';
 import type { InterceptRule, IsResponse } from '../../src/model/index.js';
 import type { InterceptBackend } from '../../src/intercept/types.js';
 import { buildSpawnArgs } from '../../src/spawn/index.js';
@@ -359,6 +359,129 @@ describe('issue #101 — serve() normalizes the response into the engine ServeSt
     await serveRejects({ body: { cb: (() => 1) as never } });
     await serveRejects({ body: [1, (() => 1) as never] });
     await serveRejects({ body: { s: Symbol('x') as never } });
+  });
+});
+
+describe('issue #111 — addRule() refuses values JSON cannot represent', () => {
+  /** A rule the engine would accept — the byte-identity baseline. */
+  const validRule = (): InterceptRule => ({
+    host: 'x.example.com',
+    action: { serve: { statusCode: 200 } },
+  });
+
+  async function addRuleRejects(rule: InterceptRule | InterceptRule[]): Promise<void> {
+    const fake = new FakeInterceptBackend();
+    const { engine } = engineOf(fake);
+    const handle = await engine.intercept();
+    await expect(handle.addRule(rule)).rejects.toThrow(InvalidDefinition);
+    // The point of the guard is that nothing reaches the wire — a rule that threw but was still
+    // posted would be the silent-null bug wearing an error message.
+    expect(fake.addRulesCalls).toEqual([]);
+  }
+
+  it('rejects a non-finite number in a predicate instead of nulling it on the wire', async () => {
+    const fake = new FakeInterceptBackend();
+    const { engine } = engineOf(fake);
+    const handle = await engine.intercept();
+    await expect(
+      handle.serve([{ equals: { count: NaN } }], { statusCode: 200 })
+    ).rejects.toThrow(InvalidDefinition);
+    expect(fake.addRulesCalls).toEqual([]);
+  });
+
+  it('rejects non-finite predicate values on forward() too', async () => {
+    const fake = new FakeInterceptBackend();
+    const { engine } = engineOf(fake);
+    const handle = await engine.intercept();
+    await expect(handle.forward([{ equals: { n: Infinity } }], 7777)).rejects.toThrow(
+      InvalidDefinition
+    );
+    expect(fake.addRulesCalls).toEqual([]);
+  });
+
+  it('rejects a non-finite statusCode handed to the addRule() escape hatch', async () => {
+    // serve() screens this via toStatusCode(); addRule() is documented as verbatim, so before this
+    // guard a NaN here reached the engine as `"statusCode": null`.
+    await addRuleRejects({ host: 'x.example.com', action: { serve: { statusCode: NaN } } });
+    await addRuleRejects({ host: 'x.example.com', action: { serve: { statusCode: Infinity } } });
+    await addRuleRejects({ host: 'x.example.com', action: { serve: { statusCode: -Infinity } } });
+  });
+
+  it('rejects a non-finite value nested inside and/or/not predicate combinators', async () => {
+    // The replacer recurses, but `and`/`or`/`not` are the shapes a real caller nests into — pinned
+    // so a future guard that only walks top-level predicate fields fails here.
+    await addRuleRejects({
+      action: { serve: { statusCode: 200 } },
+      predicates: [{ and: [{ equals: { a: 1 } }, { equals: { deep: NaN } }] }],
+    });
+    await addRuleRejects({
+      action: { serve: { statusCode: 200 } },
+      predicates: [{ not: { equals: { deep: Infinity } } }],
+    });
+    await addRuleRejects({
+      action: { serve: { statusCode: 200 } },
+      predicates: [{ or: [{ equals: { deep: NaN } }] }],
+    });
+  });
+
+  it('rejects function and symbol values, which JSON.stringify would drop silently', async () => {
+    // jsonSafeReplacer refuses function/bigint/symbol in one condition; without a test for each,
+    // narrowing that condition to bigint alone would ship unnoticed and restore the silent drop.
+    await addRuleRejects({
+      host: 'x.example.com',
+      action: { serve: { statusCode: 200 } },
+      predicates: [{ equals: { cb: (() => 1) as never } }],
+    });
+    await addRuleRejects({
+      host: 'x.example.com',
+      action: { serve: { statusCode: 200 } },
+      predicates: [{ equals: { s: Symbol('x') as never } }],
+    });
+  });
+
+  it('rejects a bigint with a typed error rather than a raw TypeError', async () => {
+    const rule = {
+      host: 'x.example.com',
+      action: { serve: { statusCode: 200, body: 1n as never } },
+    } as unknown as InterceptRule;
+    const fake = new FakeInterceptBackend();
+    const { engine } = engineOf(fake);
+    const handle = await engine.intercept();
+    const thrown = await handle.addRule(rule).catch((e: unknown) => e);
+    expect(thrown).toBeInstanceOf(InvalidDefinition);
+    expect(thrown).not.toBeInstanceOf(TypeError);
+    expect(fake.addRulesCalls).toEqual([]);
+  });
+
+  it('names the offending key and preserves the WireValidationError as cause', async () => {
+    const rule = {
+      host: 'x.example.com',
+      action: { serve: { statusCode: 200 } },
+      predicates: [{ equals: { temperature: NaN } }],
+    } as unknown as InterceptRule;
+    const fake = new FakeInterceptBackend();
+    const { engine } = engineOf(fake);
+    const handle = await engine.intercept();
+    const thrown = (await handle.addRule(rule).catch((e: unknown) => e)) as InvalidDefinition;
+    expect(thrown).toBeInstanceOf(InvalidDefinition);
+    expect(thrown.message).toMatch(/temperature/);
+    expect((thrown as { cause?: unknown }).cause).toBeInstanceOf(WireValidationError);
+  });
+
+  it('rejects an array argument if any rule in it is unserializable', async () => {
+    await addRuleRejects([
+      { host: 'ok.example.com', action: { serve: { statusCode: 200 } } },
+      { host: 'bad.example.com', action: { serve: { statusCode: NaN } } },
+    ]);
+  });
+
+  it('leaves a valid rule byte-identical to the unguarded serialization', async () => {
+    const fake = new FakeInterceptBackend();
+    const { engine } = engineOf(fake);
+    const handle = await engine.intercept();
+    const rule = validRule();
+    await handle.addRule(rule);
+    expect(fake.addRulesCalls[0]).toBe(JSON.stringify([rule]));
   });
 });
 
