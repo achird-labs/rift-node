@@ -625,10 +625,13 @@ Mountebank-shaped `IsResponse` the DSL builds — so `serve()` converts rather t
 | multi-value header (`string[]`) | **throws `InvalidDefinition`** — joining would corrupt `Set-Cookie` |
 | `_mode: 'binary'` or unrecognized | **throws `InvalidDefinition`** — the base64 would be served as literal text |
 | `statusCode` outside `100..999` | **throws `InvalidDefinition`** — the engine cannot render it as a status line |
+| `body` containing `NaN`/`Infinity`/`-Infinity` | **throws `InvalidDefinition`** locating the offending value — `JSON.stringify` would silently emit `null` |
 
-Use `forward()` to an imposter when you need a case in the bottom three rows, or `addRule()` to send
-a rule verbatim. Body key order follows your object; the imposter path re-serializes through Rust and
-emits sorted keys, so the two differ byte-wise (equivalent JSON) if a SUT hashes the body.
+Use `forward()` to an imposter when you need a multi-value header, a binary body, or a status code
+outside `100..999`, or `addRule()` to send a rule verbatim. A non-finite number has no JSON form at
+all, so no escape hatch applies there — send it as a string if the SUT expects one. Body key order
+follows your object; the imposter path re-serializes through Rust and emits sorted keys, so the two
+differ byte-wise (equivalent JSON) if a SUT hashes the body.
 
 The table covers what `serve()` itself refuses. Beyond it, the **engine** silently drops hop-by-hop
 headers (`Connection`, `Keep-Alive`, …) and any header whose value contains CR/LF, and it always

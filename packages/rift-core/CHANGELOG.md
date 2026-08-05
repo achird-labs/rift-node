@@ -7,6 +7,30 @@ All notable changes to `@rift-vs/rift` are documented here. This project adheres
 
 ### Fixed
 
+- **A non-finite number in a serialized body now throws instead of becoming `null`** (issue #106).
+  `toWireString()`/`toWireJson()` documented that a non-serializable value is never silently
+  dropped, but `jsonSafeReplacer` only inspected `function`/`bigint`/`symbol` — so `NaN`,
+  `Infinity` and `-Infinity` slipped through to `JSON.stringify`, which renders each of them as
+  `null`. The key still arrived at the SUT, holding a value you never wrote, and the failure
+  surfaced in the SUT's decoder with nothing on the mock side to correlate it against.
+
+  Both serialization paths now refuse it: the replacer throws `WireValidationError` naming the
+  offending key and which value it was (`NaN` vs `Infinity` vs `-Infinity`), and
+  `intercept.serve()`'s body — which called bare `JSON.stringify` and inherited the same gap —
+  serializes through that same replacer, surfacing as `InvalidDefinition` to keep `serve()`'s
+  error contract uniform. Finite numbers are unaffected, and the check costs nothing: the
+  replacer already visits every value in the single stringify pass.
+
+  Side effect of sharing the replacer: a function or symbol inside a `serve()` body now throws
+  too, rather than being dropped or nulled by `JSON.stringify`. The body is typed `JsonValue`, so
+  those were already out of contract.
+
+  Scope: this covers the wire-model serializer and `serve()`'s body. A non-finite number reached
+  through a different door is still nulled silently — inside an intercept **predicate**, inside a
+  rule handed to the verbatim `addRule()` escape hatch, or anywhere in an imposter sent via the
+  remote/spawn admin client, none of which serialize through this replacer. Those are separate
+  pre-existing gaps, tracked on their own.
+
 - **`intercept.serve()` now conforms to the engine's serve-stub wire contract** (issue #101).
   `serve()` used to embed a Mountebank-shaped response verbatim, so the everyday
   `serve(host, okJson({ ok: true }))` posted an **object** `body` where the engine's `ServeStub`
