@@ -240,6 +240,19 @@ function taskManagementApi(): Imposter {
     .record()
     .stub(
       stub()
+        .inScenario('TaskAPI-GetTasks-FilterByStatus')
+        .when(req.path(endsWith('/tasks')))
+        .when(req.query('status', 'OPEN'))
+        .when(req.method(deepEquals('GET')))
+        .willReturn(
+          json(200, {
+            count: 1,
+            tasks: [{ taskId: 'task-001', name: 'Review PR', status: 'OPEN', priority: 'HIGH' }],
+          })
+        )
+    )
+    .stub(
+      stub()
         .inScenario('TaskAPI-GetTasks-Success')
         .when(req.path(endsWith('/tasks')))
         .when(req.method(deepEquals('GET')))
@@ -261,16 +274,10 @@ function taskManagementApi(): Imposter {
     )
     .stub(
       stub()
-        .inScenario('TaskAPI-GetTasks-FilterByStatus')
-        .when(req.path(endsWith('/tasks')))
-        .when(req.query('status', 'OPEN'))
+        .inScenario('TaskAPI-GetTaskById-NotFound')
+        .when(req.path(matches('^/tasks/task-999$')))
         .when(req.method(deepEquals('GET')))
-        .willReturn(
-          json(200, {
-            count: 1,
-            tasks: [{ taskId: 'task-001', name: 'Review PR', status: 'OPEN', priority: 'HIGH' }],
-          })
-        )
+        .willReturn(json(404, { error: 'Task not found', code: 'TASK_NOT_FOUND' }))
     )
     .stub(
       stub()
@@ -289,13 +296,6 @@ function taskManagementApi(): Imposter {
             updatedAt: '2024-01-15T14:30:00Z',
           })
         )
-    )
-    .stub(
-      stub()
-        .inScenario('TaskAPI-GetTaskById-NotFound')
-        .when(req.path(matches('/tasks/task-999')))
-        .when(req.method(deepEquals('GET')))
-        .willReturn(json(404, { error: 'Task not found', code: 'TASK_NOT_FOUND' }))
     )
     .stub(
       stub()
