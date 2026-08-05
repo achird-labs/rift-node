@@ -31,3 +31,8 @@ jobs:
       branch_prefix: chore/engine-
       dep_name: rift engine
       dry_run: ${{ github.event.inputs.dry_run == 'true' }}
+    # Without this the bump PR is authored by GITHUB_TOKEN and gets zero checks, so CI never runs on
+    # it. Passed explicitly rather than via `secrets: inherit` so only this one secret crosses into
+    # the reusable workflow.
+    secrets:
+      BUMP_TOKEN: ${{ secrets.BUMP_TOKEN }}
