@@ -11,7 +11,7 @@ import { type ChildProcess, spawn as spawnProcess } from 'child_process';
 import net from 'net';
 import { RemoteClient } from '../remote/index.js';
 import { InvalidDefinition } from '../errors.js';
-import { assertApiKeyNotBlank } from '../apikey.js';
+import { assertApiKeyNotBlank, assertInterceptAuthValid } from '../apikey.js';
 import type { InterceptOptions } from '../intercept/types.js';
 import { resolveBinary, type EnvRecord } from './resolve.js';
 
@@ -274,6 +274,18 @@ export async function spawn(opts: SpawnOptions = {}, deps: SpawnDeps = defaultSp
   // Ahead of resolveBinary: a blank key is a caller mistake, so it should not cost a binary
   // download to discover, and the engine would only report it as an opaque child-process exit.
   const apiKey = resolveApiKey(opts.apiKey);
+  // Same door, same reasoning (issue #115): the child inherits RIFT_INTERCEPT_AUTH too, and the
+  // engine refuses to start on a malformed one, a blank-halved one, or a valid one with no listener
+  // to guard. `false` is "no listener" exactly as an absent option is.
+  //
+  // Read once, unlike MB_APIKEY below: that one is re-checked after resolution because a value that
+  // goes blank mid-download leaves the engine and the admin client disagreeing, silently. This one
+  // has no such pair — the engine fails closed on it by itself, so a mid-download change costs the
+  // opaque child exit this guard usually prevents rather than a wrong-but-quiet success.
+  assertInterceptAuthValid(
+    process.env.RIFT_INTERCEPT_AUTH,
+    opts.intercept === true || (typeof opts.intercept === 'object' && opts.intercept !== null)
+  );
 
   const binaryPath = await deps.resolveBinary({
     version: opts.version,

@@ -7,6 +7,30 @@ All notable changes to `@rift-vs/rift` are documented here. This project adheres
 
 ### Fixed
 
+- **An ambient `RIFT_INTERCEPT_AUTH` is validated before a binary is resolved** (issue #115). The
+  engine declares `--intercept-auth <USER:PASS>` with `env = "RIFT_INTERCEPT_AUTH"`, and both
+  transports that spawn a child inherit `process.env` wholesale — so the variable is engine
+  configuration whether the caller meant it that way or not, the same door `MB_APIKEY` came through
+  in issue #103. The SDK referenced it nowhere.
+
+  Since rift#885 (engine v0.17.0) three shapes make the engine refuse to start, and each surfaced
+  through the SDK as an opaque `Rift process exited with code N`, after binary resolution that may
+  include a download: a value with no `:`, a value with a blank username or password, and — the one
+  most likely to bite — a **perfectly valid** credential when no intercept listener was requested,
+  because a credential with nothing to guard reads as a protection that is not in force. That last
+  case means any ambient value at all was fatal to `rift.spawn()` without `intercept`, and to every
+  compat `create()`, which never passes intercept flags.
+
+  All three are now refused up front with `InvalidDefinition` naming `RIFT_INTERCEPT_AUTH` and the
+  remedy. A valid credential *with* a listener is passed through untouched — an ambient variable is
+  currently the only way to give a spawned engine an intercept credential. Blank halves are judged
+  with the same both-dialect rule as the admin key (issue #116), since the engine trims them with the
+  same Rust `str::trim`.
+
+  Note this closes no security hole: below v0.17.0 the CLI flag does not exist, so clap never reads
+  the variable and it is inert; at or above it, the engine already fails closed on its own. The fix
+  is about failing loudly and early, in the SDK's own vocabulary.
+
 - **The blank-admin-key guard now agrees with the engine on U+0085, and `create()` re-checks after
   binary resolution** (issue #116). Two gaps left over from issues #103/#108:
 
