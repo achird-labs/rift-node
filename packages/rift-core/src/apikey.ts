@@ -19,10 +19,9 @@ import { InvalidDefinition } from './errors.js';
  * `undefined` means "no key configured" and is left alone. A key that merely *contains* spaces is
  * valid and is never trimmed here — the engine compares the configured key byte for byte.
  *
- * "Blank" is JavaScript's `String.prototype.trim`, which is close to but not identical with the
- * engine's Rust `str::trim`: JS also strips U+FEFF, Rust also strips U+0085. Both disagreements are
- * on absurd inputs and both resolve safely — a key the engine would call blank is refused at its own
- * startup, and one this guard over-rejects simply has to be spelled without the stray code point.
+ * "Blank" covers both trim dialects (issue #116) — see {@link isBlank}. What disagreement remains
+ * runs one way only: a handful of exotic keys the engine would accept are refused here, which costs
+ * the caller a respelling rather than an open admin plane.
  *
  * The engine's other door — an inherited `MB_APIKEY` environment variable — is guarded by
  * `resolveApiKey()` in `spawn/spawn.ts`, which resolves the effective key before calling this and
@@ -33,8 +32,29 @@ import { InvalidDefinition } from './errors.js';
  */
 export type ApiKeySource = 'apiKey option' | 'MB_APIKEY environment variable';
 
+/** U+0085 (NEL). In Rust's `White_Space` set and so trimmed by the engine, but NOT in JavaScript's:
+ * `'\u0085'.trim()` is still one character long. Written as an escape because the literal character
+ * is invisible in an editor and survives copy-paste poorly. */
+const NEL = '\u0085';
+
+/**
+ * Blank under EITHER trim dialect — JavaScript's `trim()` plus Rust's extra U+0085.
+ *
+ * Covering both is what makes the guard fail closed: judging by JS alone let a NEL-only key through
+ * as if it were a credential, and the engine then refused to start on its own (>= 0.17.0) with the
+ * opaque child-exit error this guard exists to replace. A key that merely *contains* a NEL among
+ * real characters is still a real key.
+ *
+ * Slightly stricter than "blank to JS OR blank to Rust": a key mixing only U+FEFF and U+0085 is
+ * refused here though neither dialect alone calls it blank. That and the U+FEFF-only case are the
+ * only over-rejections, and both cost a respelling rather than an open admin plane.
+ */
+function isBlank(value: string): boolean {
+  return value.replaceAll(NEL, '').trim() === '';
+}
+
 export function assertApiKeyNotBlank(apiKey: string | undefined, source: ApiKeySource = 'apiKey option'): void {
-  if (apiKey === undefined || apiKey.trim() !== '') return;
+  if (apiKey === undefined || !isBlank(apiKey)) return;
   // Name the door the key came through: the engine reads two, and only the caller knows which one
   // they meant to set.
   const remedy =

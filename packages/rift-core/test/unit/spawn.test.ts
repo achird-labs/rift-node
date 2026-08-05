@@ -372,6 +372,39 @@ describe('spawn — blank apiKey is rejected (issue #96)', () => {
     expect(() => buildSpawnArgs(2525, { apiKey: '　' })).toThrow(InvalidDefinition);
   });
 
+  it('rejects U+0085 (NEL), which Rust trims as whitespace but JavaScript does not', async () => {
+    // Issue #116. The engine's guard is Rust `str::trim`, whose White_Space set includes NEL; JS
+    // `trim()` leaves it. Without this the SDK waved through a key the engine calls blank, and the
+    // friendly InvalidDefinition that issue #108 exists to produce became an opaque child exit.
+    expect(() => buildSpawnArgs(2525, { apiKey: '\u0085' })).toThrow(InvalidDefinition);
+    expect(() => buildSpawnArgs(2525, { apiKey: ' \u0085 \t' })).toThrow(InvalidDefinition);
+  });
+
+  it('rejects U+FEFF (BOM), the divergence in the other direction', async () => {
+    // JS trim() strips BOM and Rust's does not, so this is over-rejection: a key the engine would
+    // accept. Harmless (respell it) and pinned so the union stays deliberate rather than accidental.
+    expect(() => buildSpawnArgs(2525, { apiKey: '\uFEFF' })).toThrow(InvalidDefinition);
+  });
+
+  it('accepts a real key that merely contains a NEL — only wholly-blank keys are refused', async () => {
+    expect(buildSpawnArgs(2525, { apiKey: 'a\u0085b' })).toEqual(
+      expect.arrayContaining(['--api-key', 'a\u0085b'])
+    );
+  });
+
+  it('spawn() rejects a NEL-only apiKey before it resolves a binary', async () => {
+    // The three cases above go through buildSpawnArgs; this drives the real entry point, so the
+    // guard is pinned on the path callers actually take. RIFT_OFFLINE makes resolveBinary fail with
+    // its own air-gap Error, so InvalidDefinition can only mean the guard ran first.
+    await expect(
+      spawn({
+        apiKey: '\u0085',
+        binaryPath: '/nonexistent/rift-binary-issue-116',
+        env: { RIFT_OFFLINE: '1' },
+      })
+    ).rejects.toThrow(InvalidDefinition);
+  });
+
   it('spawn() rejects a blank apiKey before it resolves a binary', async () => {
     // RIFT_OFFLINE makes resolveBinary fail fast and deterministically with its own air-gap Error,
     // so InvalidDefinition here can ONLY mean the guard ran first. Without it the assertion would
@@ -428,6 +461,15 @@ describe('spawn — MB_APIKEY env contract (issue #103)', () => {
       expect(() => resolveApiKey(undefined, { MB_APIKEY: '\t\n' })).toThrow(InvalidDefinition);
       expect(() => resolveApiKey(undefined, { MB_APIKEY: '　' })).toThrow(InvalidDefinition);
       expect(() => resolveApiKey(undefined, { MB_APIKEY: '' })).toThrow(/MB_APIKEY/);
+    });
+
+    it('rejects a NEL-only MB_APIKEY through the env door too (issue #116)', () => {
+      // The env door is the one an operator sets by accident; the option door is the one covered
+      // above. Both reach the same guard, and both must agree with the engine's Rust trim.
+      expect(() => resolveApiKey(undefined, { MB_APIKEY: '\u0085' })).toThrow(InvalidDefinition);
+      expect(() => resolveApiKey(undefined, { MB_APIKEY: ' \u0085 ' })).toThrow(/MB_APIKEY/);
+      // ...and a real key that merely contains one is still returned verbatim.
+      expect(resolveApiKey(undefined, { MB_APIKEY: 'a\u0085b' })).toBe('a\u0085b');
     });
 
     it('still names the option when the blank key came through that door', () => {

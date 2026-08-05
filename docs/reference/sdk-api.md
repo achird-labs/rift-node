@@ -684,6 +684,8 @@ interface SpawnOptions {
   apiKey?: string;                                // --api-key (also used by the client); blank
                                                   // throws InvalidDefinition before the binary
                                                   // is resolved — omit to run without admin auth
+                                                  // "blank" = whitespace under JS trim() OR Rust
+                                                  // str::trim (the engine's), so U+0085 counts
   localOnly?: boolean; ipWhitelist?: string[]; origin?: string;
   datadir?: string; configfile?: string;
   defaultTls?: { cert: string; key: string };     // --default-tls-cert/key

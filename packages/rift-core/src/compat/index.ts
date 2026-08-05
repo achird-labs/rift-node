@@ -210,6 +210,13 @@ export async function create(
   const args = buildCliArgs(options);
 
   const binaryPath = await deps.resolveEngineBinary();
+  // Second read, because the child re-reads MB_APIKEY when it execs and resolving the binary above
+  // can take arbitrarily long — including a real download. Deliberately NOT spawn()'s stricter
+  // exact-value comparison: that one keeps the engine and the SDK-built admin client on a single
+  // key, and create() builds no admin client, so a value that merely *changed* here is harmless.
+  // A value that went blank is not, and `findBinary()` can hand back a pre-0.17 engine that opens
+  // its admin plane rather than refusing to start.
+  resolveApiKey(undefined);
 
   const proc = deps.spawn(binaryPath, args, {
     stdio: ['ignore', 'pipe', 'pipe'],
