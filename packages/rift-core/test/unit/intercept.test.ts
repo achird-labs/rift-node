@@ -295,6 +295,63 @@ describe('issue #101 — serve() normalizes the response into the engine ServeSt
     );
   });
 
+  it("rejects the four headers the engine's proxy manages itself (issue #107)", async () => {
+    for (const name of ['Host', 'Connection', 'content-Length', 'TRANSFER-ENCODING']) {
+      await serveRejects({ headers: { [name]: 'x' } });
+    }
+  });
+
+  it('rejects a header whose name or value carries CR/LF (issue #107)', async () => {
+    await serveRejects({ headers: { 'X-A': 'v\r\nInjected: 1' } });
+    await serveRejects({ headers: { 'X-A': 'v\nInjected: 1' } });
+    await serveRejects({ headers: { 'X-A': 'v\rInjected: 1' } });
+    await serveRejects({ headers: { 'X-A\r\nInjected': 'v' } });
+  });
+
+  it('points refusals at the engine, never at forward() — which strips the same names (issue #107)', async () => {
+    const fake = new FakeInterceptBackend();
+    const { engine } = engineOf(fake);
+    const handle = await engine.intercept();
+    // forward_and_relay applies is_hop_by_hop on both legs, so suggesting forward() would send the
+    // caller to a path with the identical restriction.
+    await expect(handle.serve('x.example.com', { headers: { Connection: 'keep-alive' } })).rejects.toThrow(
+      /engine/i
+    );
+    await expect(
+      handle.serve('x.example.com', { headers: { Connection: 'keep-alive' } })
+    ).rejects.not.toThrow(/forward\(\)/);
+    await expect(
+      handle.serve('x.example.com', { headers: { 'X-A': 'v\r\nb' } })
+    ).rejects.not.toThrow(/forward\(\)/);
+  });
+
+  it('still sends Keep-Alive and ordinary headers — the guard mirrors the engine, not RFC 7230 (issue #107)', async () => {
+    // rift's is_hop_by_hop matches exactly host/connection/content-length/transfer-encoding.
+    // Keep-Alive, Proxy-Authenticate, TE and Upgrade are RFC 7230 hop-by-hop but the engine passes
+    // them through — rejecting them here would refuse headers the SUT would actually have received.
+    expect((await serveWire({ headers: { 'Keep-Alive': 'timeout=5' } })).headers).toEqual({
+      'Keep-Alive': 'timeout=5',
+    });
+    expect((await serveWire({ headers: { Upgrade: 'websocket', TE: 'trailers' } })).headers).toEqual({
+      Upgrade: 'websocket',
+      TE: 'trailers',
+    });
+    expect((await serveWire({ headers: { 'X-Custom': 'v', 'Content-Type': 'text/plain' } })).headers).toEqual({
+      'X-Custom': 'v',
+      'Content-Type': 'text/plain',
+    });
+  });
+
+  it('sends a header literally named __proto__ instead of swallowing it (issue #107)', async () => {
+    // On a plain object `out[name] = value` hits the prototype setter for this one name and the
+    // header disappears with no error. Only reachable when the headers came from JSON.parse — an
+    // object literal never creates the own property in the first place.
+    const headers = JSON.parse('{"__proto__":"x","X-A":"1"}') as Record<string, string>;
+    const wire = (await serveWire({ headers })).headers;
+    expect(JSON.stringify(wire)).toContain('"__proto__":"x"');
+    expect(JSON.stringify(wire)).toContain('"X-A":"1"');
+  });
+
   it('rejects a function or symbol in the body rather than dropping it (issue #106)', async () => {
     // Sharing the wire-model replacer tightened this path: JSON.stringify used to drop a
     // function-valued key outright and null one inside an array. Pinned so a future refactor of
