@@ -637,9 +637,14 @@ differ byte-wise (equivalent JSON) if a SUT hashes the body.
 
 The last two rows have no escape hatch: the engine strips those same four names on the `forward()`
 request and response legs as well, and a CR/LF-bearing header is unsendable in valid HTTP on any
-path. `addRule()` is not a way around them either — it bypasses this validation entirely, so the
-engine drops the header silently just as it did before. Note the four are exactly what the engine
-manages — `Keep-Alive`, `TE` and `Upgrade` are RFC 7230 hop-by-hop but are **not** stripped, so
+path. `addRule()` is not a way around them either — it skips the normalization above, so the engine
+drops the header silently just as it did before. What `addRule()` does *not* skip is JSON
+representability: a rule carrying a non-finite number, a `bigint`, a function or a symbol —
+anywhere, including `statusCode` and `predicates` — throws `InvalidDefinition` rather than reaching
+the engine as a `null` you never wrote (a `null` the transport could not catch afterwards, since it
+re-parses the serialized rule). It still does not range-check a finite `statusCode`. Note the four
+names above are exactly what the engine manages — `Keep-Alive`, `TE` and `Upgrade` are RFC 7230
+hop-by-hop but are **not** stripped, so
 `serve()` sends them and the SUT receives them. The engine still appends its own `Content-Length`
 and `Connection: close` to every served response.
 
