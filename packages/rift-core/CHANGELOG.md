@@ -7,6 +7,26 @@ All notable changes to `@rift-vs/rift` are documented here. This project adheres
 
 ### Fixed
 
+- **compat `create()` now validates the `MB_APIKEY` it hands the child** (issue #108). `create()`
+  spawns the engine with no `env` of its own, so the child inherits `process.env` wholesale — which
+  makes an ambient `MB_APIKEY` engine configuration whether or not the caller thought of it that way
+  (the engine declares `--api-key` with `env = "MB_APIKEY"`). Nothing validated it on this path: a
+  **blank** value switched the auth gate on and then matched every unauthenticated request on engines
+  ≤ 0.16.x — a silently open admin plane — and on ≥ 0.17.0 it failed late as an opaque
+  `Rift process exited with code N`, after binary resolution that may include a download.
+
+  The ambient value is now checked at entry, before a binary is resolved, and a blank one throws
+  `InvalidDefinition` naming `MB_APIKEY environment variable` — the same blank-value guard and remedy
+  `rift.spawn()` has used since issue #103. An unset or genuinely non-blank `MB_APIKEY` is untouched
+  and still inherited by the child, so legitimate configuration keeps working. `create()` does not
+  mirror `spawn()`'s post-resolution re-check, which exists so the engine and the SDK-built admin
+  client cannot end up on different keys; `create()` builds no admin client, so it has no such pair
+  to keep in step.
+
+  `create()` deliberately gains **no** `apiKey` option: Mountebank's `mb.create()` has none and this
+  surface is a drop-in compat contract, so validating the ambient value is the whole fix. Callers who
+  want to pass a key explicitly should use `rift.spawn()`.
+
 - **`intercept.serve()` now refuses the headers the engine silently drops** (issue #107). The engine's
   proxy skips four connection-management headers — `Host`, `Connection`, `Content-Length` and
   `Transfer-Encoding`, matched case-insensitively — and skips any header whose **name or value**
@@ -139,9 +159,8 @@ All notable changes to `@rift-vs/rift` are documented here. This project adheres
   The blank-key error now names the door the key came through (`apiKey option` vs
   `MB_APIKEY environment variable`) instead of always saying `apiKey`.
 
-  Scope: this covers the `rift.spawn()` transport. The Mountebank-compat `create()` entry point
-  spawns its own child and has no api-key handling of its own, so a blank inherited `MB_APIKEY`
-  still reaches the engine unguarded there (tracked separately).
+  Scope: this covered the `rift.spawn()` transport only; the Mountebank-compat `create()` entry point
+  was left unguarded and is closed by the issue #108 entry above.
 
 ## 0.15.0 — 2026-07-21
 

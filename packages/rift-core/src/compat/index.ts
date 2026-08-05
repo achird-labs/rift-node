@@ -19,6 +19,7 @@ import { spawn as spawnProcess, ChildProcess } from 'child_process';
 import { EventEmitter } from 'events';
 import { findBinary } from '../binary.js';
 import { resolveBinary } from '../spawn/resolve.js';
+import { resolveApiKey } from '../spawn/spawn.js';
 import { UnsupportedCreateOptionError } from '../errors.js';
 import type { CreateOptions, RiftServer } from '../types.js';
 
@@ -199,6 +200,11 @@ export async function create(
   deps: CreateDeps = defaultDeps
 ): Promise<RiftServer> {
   rejectUnsupportedOptions(options);
+  // The child inherits this process's environment wholesale (no `env` below), so an ambient
+  // MB_APIKEY is engine configuration whether the caller meant it as such or not — and a blank one
+  // opens the admin plane on engines <= 0.16.x. Checked before resolving a binary so a caller
+  // mistake costs no download. The result is unused: create() builds no admin client.
+  resolveApiKey(undefined);
   const port = options.port || DEFAULT_PORT;
   const host = options.host || DEFAULT_HOST;
   const args = buildCliArgs(options);
