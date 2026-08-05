@@ -50,7 +50,7 @@ import { computeClosest, evalPredicates } from './verify/eval.js';
 import type { InterceptBackend, InterceptOptions } from './intercept/types.js';
 import { RemoteInterceptBackend } from './intercept/remote-backend.js';
 import { forwardRule, redirectRule, serveRule } from './intercept/rules.js';
-import { jsonSafeReplacer } from './model/serialize.js';
+import { jsonSafeReplacer, stringifyJsonSafe } from './model/serialize.js';
 
 // --- shared small types ----------------------------------------------------------------------
 
@@ -713,7 +713,11 @@ async function startInterceptWithBackend(
   backend: InterceptBackend,
   options: InterceptOptions | undefined
 ): Promise<InterceptHandle> {
-  const { interceptPort, interceptUrl } = await backend.startIntercept(JSON.stringify(options ?? {}));
+  // Guarded like every other outbound payload (issue #112): `InterceptOptions.port` is a
+  // caller-supplied number, so a non-finite one reached the embedded FFI as `null` and left the
+  // remote/spawn backend building the URL `http://host:null` — a handle that looks started and is
+  // not.
+  const { interceptPort, interceptUrl } = await backend.startIntercept(stringifyJsonSafe(options ?? {}));
   return new InterceptHandleImpl(backend, { port: interceptPort, url: interceptUrl });
 }
 

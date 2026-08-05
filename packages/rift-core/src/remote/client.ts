@@ -8,6 +8,7 @@
 
 import { writeFile } from 'fs/promises';
 import type { Imposter, ImpostersConfig, RecordedRequest, Stub } from '../model/index.js';
+import { stringifyJsonSafe } from '../model/serialize.js';
 import {
   CommunicationError,
   EngineError,
@@ -362,12 +363,17 @@ export class RemoteClient implements AdminApi {
     return this.parseJsonBody<T>(response, init.allowEmpty ?? false);
   }
 
+  /** Every outbound body goes through the wire model's JSON-safety guard (issue #112), so the
+   * guarantee holds for the whole admin surface rather than only where a caller remembered to ask
+   * for it. Applied to all bodies, not a list of imposter-ish routes: a route list is a thing a new
+   * method silently falls off, and flow-state values are caller data too. Serialization throws
+   * before `fetch` is reached, so a refused payload is never half-sent. */
   private toRequestInit(init: { method: string; body?: unknown }): RequestInit {
     const headers = { ...this.#headers, ...(init.body !== undefined ? { 'content-type': 'application/json' } : {}) };
     return {
       method: init.method,
       ...(Object.keys(headers).length > 0 ? { headers } : {}),
-      ...(init.body !== undefined ? { body: JSON.stringify(init.body) } : {}),
+      ...(init.body !== undefined ? { body: stringifyJsonSafe(init.body) } : {}),
     };
   }
 

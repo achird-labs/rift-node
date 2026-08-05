@@ -14,9 +14,9 @@ import type { AddressInfo } from 'net';
 import { jest } from '@jest/globals';
 import { createEmbeddedEngine } from '../src/create.js';
 import type { NativeEngineLike, StartAdminPlane } from '../src/admin.js';
-import { EngineVersionError, NativeLibraryError, ImposterNotFound, RiftError } from '@rift-vs/rift';
+import { EngineVersionError, NativeLibraryError, ImposterNotFound, RiftError, WireValidationError } from '@rift-vs/rift';
 import { MIN_ENGINE_VERSION } from '@rift-vs/rift/internal';
-import type { Imposter, Stub } from '@rift-vs/rift/internal';
+import type { AdminApi, Imposter, Stub } from '@rift-vs/rift/internal';
 
 // -------------------------------------------------------------------------------------------
 // Fake NativeEngineLike — an in-memory stand-in for `librift_ffi`, driven entirely through the
@@ -732,6 +732,150 @@ describe('two engines — independent admin planes', () => {
     } finally {
       await planeA.close();
       await planeB.close();
+    }
+  });
+});
+
+// -------------------------------------------------------------------------------------------
+// issue #112 — the embedded transport serializes caller data with the same JSON-safety guard the
+// remote/spawn transports use. Without it, `NaN` reached the native engine as `null`.
+// -------------------------------------------------------------------------------------------
+
+describe('issue #112 — embedded FFI payloads are JSON-safe', () => {
+  async function engineWithFake(): Promise<{ engine: Awaited<ReturnType<typeof createEmbeddedEngine>>; native: FakeNativeEngine }> {
+    const native = new FakeNativeEngine(goodBuildInfo());
+    const engine = await createEmbeddedEngine({}, { loadNativeEngine: async () => native });
+    return { engine, native };
+  }
+
+  it('createImposter refuses a non-finite number instead of handing the native engine a null', async () => {
+    const { engine, native } = await engineWithFake();
+    try {
+      await expect(
+        engine.admin.createImposter({
+          port: 0,
+          protocol: 'http',
+          stubs: [{ responses: [{ is: { body: { temperature: NaN } } } as never] }],
+        })
+      ).rejects.toThrow(WireValidationError);
+      expect(native.calls.filter((c) => c.fn === 'createImposter')).toEqual([]);
+    } finally {
+      await engine.close();
+    }
+  });
+
+  it('createImposter refuses a bigint with a typed error, not a raw TypeError', async () => {
+    const { engine, native } = await engineWithFake();
+    try {
+      const thrown = await engine.admin
+        .createImposter({ port: 0, protocol: 'http', meta: 1n } as never)
+        .catch((e: unknown) => e);
+      expect(thrown).toBeInstanceOf(WireValidationError);
+      expect(thrown).not.toBeInstanceOf(TypeError);
+      expect(native.calls.filter((c) => c.fn === 'createImposter')).toEqual([]);
+    } finally {
+      await engine.close();
+    }
+  });
+
+  it('setFlowState refuses a non-finite value', async () => {
+    const { engine, native } = await engineWithFake();
+    try {
+      const created = await engine.admin.createImposter({ port: 0, protocol: 'http', stubs: [] });
+      await expect(
+        engine.admin.setFlowState(created.port, 'flow', 'key', Infinity)
+      ).rejects.toThrow(WireValidationError);
+      expect(native.calls.filter((c) => c.fn === 'flowStatePut')).toEqual([]);
+    } finally {
+      await engine.close();
+    }
+  });
+
+  // Each embedded site calls stringifyJsonSafe independently — there is no chokepoint like
+  // RemoteClient.toRequestInit — so every one needs its own test or a future edit can revert that
+  // single line back to JSON.stringify with the suite still green.
+  const badStub: Stub = { responses: [{ is: { body: { n: NaN } } } as never] };
+  const stubRoutes: Array<[string, (a: AdminApi, port: number) => Promise<unknown>]> = [
+    ['addStub', (a, port) => a.addStub(port, badStub)],
+    ['replaceStubs', (a, port) => a.replaceStubs(port, [badStub])],
+    ['updateStub', (a, port) => a.updateStub(port, 0, badStub)],
+    ['addSpaceStub', (a, port) => a.addSpaceStub(port, 'flow', badStub)],
+  ];
+
+  it.each(stubRoutes)('%s refuses a non-finite number and calls no native fn', async (name, call) => {
+    const { engine, native } = await engineWithFake();
+    try {
+      const created = await engine.admin.createImposter({
+        port: 0,
+        protocol: 'http',
+        stubs: [{ responses: [{ is: { statusCode: 200 } }] }],
+      });
+      const before = native.calls.length;
+      await expect(call(engine.admin, created.port)).rejects.toThrow(WireValidationError);
+      expect(native.calls.slice(before)).toEqual([]);
+    } finally {
+      await engine.close();
+    }
+  });
+
+  it('replaceImposters refuses a non-finite number', async () => {
+    const { engine, native } = await engineWithFake();
+    try {
+      await expect(
+        engine.admin.replaceImposters({
+          imposters: [
+            { port: 0, protocol: 'http', stubs: [{ responses: [{ is: { body: { n: Infinity } } } as never] }] },
+          ],
+        })
+      ).rejects.toThrow(WireValidationError);
+      expect(native.calls.filter((c) => c.fn === 'applyConfig')).toEqual([]);
+    } finally {
+      await engine.close();
+    }
+  });
+
+  it('names the offending key and refuses a circular reference on the embedded path too', async () => {
+    const { engine } = await engineWithFake();
+    try {
+      await expect(
+        engine.admin.createImposter({
+          port: 0,
+          protocol: 'http',
+          stubs: [{ responses: [{ is: { body: { temperature: NaN } } } as never] }],
+        })
+      ).rejects.toThrow(/temperature/);
+      const circular: Record<string, unknown> = { port: 0, protocol: 'http' };
+      circular.self = circular;
+      await expect(engine.admin.createImposter(circular as never)).rejects.toThrow(WireValidationError);
+    } finally {
+      await engine.close();
+    }
+  });
+
+  it('refuses a top-level undefined rather than serializing no JSON at all', async () => {
+    // setFlowState passes the raw value straight to stringifyJsonSafe, so this is the one caller
+    // that can reach the `encoded === undefined` branch.
+    const { engine, native } = await engineWithFake();
+    try {
+      const created = await engine.admin.createImposter({ port: 0, protocol: 'http', stubs: [] });
+      await expect(
+        engine.admin.setFlowState(created.port, 'flow', 'key', undefined)
+      ).rejects.toThrow(WireValidationError);
+      expect(native.calls.filter((c) => c.fn === 'flowStatePut')).toEqual([]);
+    } finally {
+      await engine.close();
+    }
+  });
+
+  it('leaves a valid imposter byte-identical to the unguarded serialization', async () => {
+    const { engine, native } = await engineWithFake();
+    try {
+      const def: Imposter = { port: 0, protocol: 'http', stubs: [] };
+      await engine.admin.createImposter(def);
+      const call = native.calls.find((c) => c.fn === 'createImposter');
+      expect(call?.args[0]).toBe(JSON.stringify(def));
+    } finally {
+      await engine.close();
     }
   });
 });

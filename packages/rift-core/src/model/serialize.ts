@@ -1,5 +1,8 @@
 /**
- * Serialize a typed wire model to the exact JSON the engine speaks.
+ * Serialize outbound payloads to the exact JSON the engine speaks.
+ *
+ * {@link stringifyJsonSafe} is the choke point every transport serializes through; {@link
+ * toWireString} is its typed, wire-model-shaped face.
  *
  * Because the model already carries wire keys, serialization is a faithful, transformation-free
  * projection: it drops `undefined` optional fields (so omitted options never reach the wire) and
@@ -40,18 +43,41 @@ export function jsonSafeReplacer(this: unknown, key: string, value: unknown): un
   return value;
 }
 
-/** Serialize a wire model to the exact JSON string the engine accepts. */
-export function toWireString(model: WireModel, space?: number): string {
+/**
+ * Serialize any outbound payload with the JSON-safety guarantee above.
+ *
+ * Untyped on purpose: the transports carry more than a {@link WireModel} — a stub, an imposters
+ * envelope, a flow-state value — and before issue #112 each of them reached the engine through a
+ * bare `JSON.stringify`, so the guarantee this module documents was enforced nowhere a caller
+ * actually went. Every outbound body now routes through here.
+ */
+export function stringifyJsonSafe(value: unknown, space?: number): string {
+  let encoded: string | undefined;
   try {
-    return JSON.stringify(model, jsonSafeReplacer, space);
+    encoded = JSON.stringify(value, jsonSafeReplacer, space);
   } catch (err) {
     if (err instanceof WireValidationError) throw err;
-    // e.g. circular reference — JSON.stringify throws a bare TypeError.
+    // A circular reference (a bare TypeError from JSON.stringify), or anything a value's own
+    // toJSON() threw — an invalid Date raises RangeError. Carry the original text: it is the only
+    // description of what actually went wrong, and a non-Error throw has no `.message` to read.
     throw new WireValidationError(
-      `model is not JSON-serializable: ${(err as Error).message}`,
+      `value is not JSON-serializable: ${err instanceof Error ? err.message : String(err)}`,
       '$'
     );
   }
+  // Only a top-level `undefined` gets here: a function, symbol or bigint in that position throws
+  // inside the replacer first, because JSON.stringify runs it on the root value before serializing.
+  // Returning `undefined` would put the literal string "undefined" on the wire, or drop the body
+  // entirely and let the engine read it as an empty payload.
+  if (encoded === undefined) {
+    throw new WireValidationError('value has no JSON representation', '$');
+  }
+  return encoded;
+}
+
+/** Serialize a wire model to the exact JSON string the engine accepts. */
+export function toWireString(model: WireModel, space?: number): string {
+  return stringifyJsonSafe(model, space);
 }
 
 /** Project a wire model to a plain JSON-safe object (undefined optionals stripped). */

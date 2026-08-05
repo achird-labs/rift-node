@@ -570,6 +570,15 @@ describe('issue #11 — embedded transport: start, memoize, "already started"', 
     expect(JSON.parse(fake.startCalls[0] as string)).toEqual({ host: '127.0.0.1' });
   });
 
+  it('refuses a non-finite intercept port instead of starting on a null one (issue #112)', async () => {
+    // A null port reaches the embedded FFI as a started-looking handle, and leaves the remote/spawn
+    // backend building the url `http://host:null`.
+    const fake = new FakeInterceptBackend();
+    const { engine } = engineOf(fake);
+    await expect(engine.intercept({ port: NaN })).rejects.toThrow(WireValidationError);
+    expect(fake.startCalls).toEqual([]);
+  });
+
   it('a second call without options returns the memoized handle (no second backend start)', async () => {
     const fake = new FakeInterceptBackend();
     const { engine } = engineOf(fake);

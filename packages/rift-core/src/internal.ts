@@ -19,6 +19,11 @@ export type { FlowScopedOptions } from './remote/client.js';
 
 export * from './model/index.js';
 
+// The embedded transport serializes its own FFI payloads, so it needs the same JSON-safety guard
+// the HTTP transports get inside `RemoteClient` (issue #112). Internal, not `wire.*`: it is how a
+// backend must serialize, not something a user of the SDK composes with.
+export { stringifyJsonSafe } from './model/serialize.js';
+
 export { toRecordedRequest } from './verify/index.js';
 export { evalPredicates } from './verify/eval.js';
 

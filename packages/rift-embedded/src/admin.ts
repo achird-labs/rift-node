@@ -23,7 +23,7 @@ import type {
 import type { AdminApi, BuildInfo } from '@rift-vs/rift/internal';
 import type { FlowScopedOptions } from '@rift-vs/rift/internal';
 import { ImposterNotFound, InvalidDefinition, RiftError } from '@rift-vs/rift';
-import { toRecordedRequest } from '@rift-vs/rift/internal';
+import { toRecordedRequest, stringifyJsonSafe } from '@rift-vs/rift/internal';
 import { evalPredicates } from '@rift-vs/rift/internal';
 import { AdminBridge } from './bridge.js';
 
@@ -141,7 +141,7 @@ export class EmbeddedAdmin implements AdminApi {
   /** Always FFI — never the admin plane, so `inject`/scripted stubs work unconditionally (the
    * plane's `allowInjection` gate only applies to bridge-routed HTTP calls, never to this path). */
   async createImposter(imposter: Imposter): Promise<Imposter> {
-    const port = await this.#native.createImposter(JSON.stringify(imposter));
+    const port = await this.#native.createImposter(stringifyJsonSafe(imposter));
     const stored: Imposter = { ...imposter, port };
     this.#registry.set(port, stored);
     return stored;
@@ -172,7 +172,7 @@ export class EmbeddedAdmin implements AdminApi {
   }
 
   async replaceImposters(config: ImpostersConfig): Promise<ImpostersConfig> {
-    const raw = await this.#native.applyConfig(JSON.stringify(config));
+    const raw = await this.#native.applyConfig(stringifyJsonSafe(config));
     const report = JSON.parse(raw) as {
       imposters: Imposter[];
       failed?: Array<{ port?: number; error: string }>;
@@ -203,13 +203,13 @@ export class EmbeddedAdmin implements AdminApi {
     const stubs = [...(imp.stubs ?? [])];
     if (index !== undefined) stubs.splice(index, 0, stub);
     else stubs.push(stub);
-    await this.#native.replaceStubs(port, JSON.stringify(stubs));
+    await this.#native.replaceStubs(port, stringifyJsonSafe(stubs));
     imp.stubs = stubs;
   }
 
   async replaceStubs(port: number, stubs: Stub[]): Promise<void> {
     const imp = this.#requireImposter(port);
-    await this.#native.replaceStubs(port, JSON.stringify(stubs));
+    await this.#native.replaceStubs(port, stringifyJsonSafe(stubs));
     imp.stubs = [...stubs]; // copy so later caller-side mutation of `stubs` can't leak into the registry
   }
 
@@ -225,7 +225,7 @@ export class EmbeddedAdmin implements AdminApi {
     const imp = this.#requireImposter(port);
     const stubs = [...(imp.stubs ?? [])];
     stubs[this.#stubIndex(stubs, ref)] = stub;
-    await this.#native.replaceStubs(port, JSON.stringify(stubs));
+    await this.#native.replaceStubs(port, stringifyJsonSafe(stubs));
     imp.stubs = stubs;
   }
 
@@ -233,7 +233,7 @@ export class EmbeddedAdmin implements AdminApi {
     const imp = this.#requireImposter(port);
     const stubs = [...(imp.stubs ?? [])];
     stubs.splice(this.#stubIndex(stubs, ref), 1);
-    await this.#native.replaceStubs(port, JSON.stringify(stubs));
+    await this.#native.replaceStubs(port, stringifyJsonSafe(stubs));
     imp.stubs = stubs;
   }
 
@@ -302,7 +302,7 @@ export class EmbeddedAdmin implements AdminApi {
   // --- spaces ---------------------------------------------------------------------------------------
 
   async addSpaceStub(port: number, flowId: string, stub: Stub): Promise<void> {
-    await this.#native.spaceAddStub(port, flowId, JSON.stringify(stub));
+    await this.#native.spaceAddStub(port, flowId, stringifyJsonSafe(stub));
   }
 
   async listSpaceStubs(port: number, flowId: string): Promise<{ space: string; stubs: Stub[] }> {
@@ -328,7 +328,7 @@ export class EmbeddedAdmin implements AdminApi {
   }
 
   async setFlowState(port: number, flowId: string, key: string, value: unknown): Promise<void> {
-    await this.#native.flowStatePut(port, flowId, key, JSON.stringify(value));
+    await this.#native.flowStatePut(port, flowId, key, stringifyJsonSafe(value));
   }
 
   async deleteFlowState(port: number, flowId: string, key: string): Promise<void> {
