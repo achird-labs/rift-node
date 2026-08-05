@@ -22,24 +22,24 @@ const DEFAULT_STARTUP_TIMEOUT_MS = 30000;
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 5000;
 const HEALTH_CHECK_INTERVAL_MS = 100;
 
+/** The subset of {@link SpawnOptions} that shapes the engine's command line. */
+export interface SpawnArgsOptions {
+  host?: string;
+  loglevel?: string;
+  allowInjection?: boolean;
+  apiKey?: string;
+  localOnly?: boolean;
+  ipWhitelist?: string[];
+  origin?: string;
+  datadir?: string;
+  configfile?: string;
+  defaultTls?: { cert: string; key: string };
+  metricsPort?: number;
+  intercept?: boolean | InterceptOptions;
+}
+
 /** Builds the Rift engine CLI args for a given admin port. */
-export function buildSpawnArgs(
-  port: number,
-  opts: {
-    host?: string;
-    loglevel?: string;
-    allowInjection?: boolean;
-    apiKey?: string;
-    localOnly?: boolean;
-    ipWhitelist?: string[];
-    origin?: string;
-    datadir?: string;
-    configfile?: string;
-    defaultTls?: { cert: string; key: string };
-    metricsPort?: number;
-    intercept?: boolean | InterceptOptions;
-  } = {}
-): string[] {
+export function buildSpawnArgs(port: number, opts: SpawnArgsOptions = {}): string[] {
   assertApiKeyNotBlank(opts.apiKey);
   const args = ['--port', String(port)];
   if (opts.host) {
@@ -94,6 +94,40 @@ export function buildSpawnArgs(
   return args;
 }
 
+/**
+ * Resolves the admin key exactly the way the engine's own clap does: an explicit `--api-key` wins,
+ * and `MB_APIKEY` from the environment is the fallback
+ * (`#[arg(long, value_name = "TOKEN", env = "MB_APIKEY")]`).
+ *
+ * The spawned child inherits this process's environment, so `MB_APIKEY` *is* engine configuration
+ * whether or not the caller passed anything. Guarding only the option left two holes (issue #103):
+ * a blank inherited value switched the auth gate on and then matched every unauthenticated request
+ * on engines <= 0.16.x, and a non-blank one turned auth on engine-side while the SDK built its
+ * client without a credential — 401ing every admin call, on every engine version.
+ *
+ * Because an explicit option always wins, adding the fallback cannot change behaviour for a caller
+ * who passes `apiKey`.
+ */
+export function resolveApiKey(apiKey: string | undefined, env: EnvRecord = process.env): string | undefined {
+  if (apiKey !== undefined) {
+    assertApiKeyNotBlank(apiKey, 'apiKey option');
+    return apiKey;
+  }
+  const inherited = env.MB_APIKEY;
+  assertApiKeyNotBlank(inherited, 'MB_APIKEY environment variable');
+  return inherited;
+}
+
+/** Injectable IO, mirroring `compat.create()`'s `CreateDeps`. It exists so the transport's own
+ * wiring — that one resolved key reaches both the child and the admin client — is testable without
+ * a real engine binary, in the unit lane CI actually runs. */
+export interface SpawnDeps {
+  spawn: typeof spawnProcess;
+  resolveBinary: typeof resolveBinary;
+}
+
+const defaultSpawnDeps: SpawnDeps = { spawn: spawnProcess, resolveBinary };
+
 export interface SpawnOptions {
   /** Admin port to bind. Defaults to an OS-assigned ephemeral port. */
   port?: number;
@@ -115,10 +149,12 @@ export interface SpawnOptions {
    * whitespace-only) value throws {@link InvalidDefinition} before the binary is resolved — omit it
    * to run without admin auth.
    *
-   * The engine also honours an `MB_APIKEY` env var, which the child inherits from *this* process
-   * (`opts.env` below is consumed by binary resolution only and is not passed to the child). That
-   * door is not guarded here; on engine v0.17.0+ a blank value there fails the engine's own
-   * startup validation. */
+   * Omitting it falls back to the `MB_APIKEY` environment variable, mirroring the engine's own
+   * precedence (this option wins, exactly as clap's flag beats its env var). That variable is read
+   * from *this* process's environment, which the child inherits, and it is validated identically
+   * and used for the client's `Authorization` header — so an ambient key produces a working client
+   * rather than a spawn that 401s every call (issue #103). `opts.env` below is consumed by binary
+   * resolution only and is never passed to the child. */
   apiKey?: string;
   /** --local-only */
   localOnly?: boolean;
@@ -230,16 +266,16 @@ function watchForEarlyExit(proc: ChildProcess, stderr: () => string): Promise<ne
  * waits until it responds before returning a connected client. Throws on resolution failure,
  * spawn failure, early exit, or startup timeout — never swallows.
  */
-export async function spawn(opts: SpawnOptions = {}): Promise<SpawnedEngine> {
+export async function spawn(opts: SpawnOptions = {}, deps: SpawnDeps = defaultSpawnDeps): Promise<SpawnedEngine> {
   const host = opts.host ?? DEFAULT_HOST;
   const startupTimeoutMs = opts.startupTimeoutMs ?? DEFAULT_STARTUP_TIMEOUT_MS;
   const shutdownTimeoutMs = opts.shutdownTimeoutMs ?? DEFAULT_SHUTDOWN_TIMEOUT_MS;
 
   // Ahead of resolveBinary: a blank key is a caller mistake, so it should not cost a binary
   // download to discover, and the engine would only report it as an opaque child-process exit.
-  assertApiKeyNotBlank(opts.apiKey);
+  const apiKey = resolveApiKey(opts.apiKey);
 
-  const binaryPath = await resolveBinary({
+  const binaryPath = await deps.resolveBinary({
     version: opts.version,
     binaryPath: opts.binaryPath,
     env: opts.env,
@@ -252,6 +288,13 @@ export async function spawn(opts: SpawnOptions = {}): Promise<SpawnedEngine> {
     interceptPort === undefined
       ? opts.intercept
       : { ...(typeof opts.intercept === 'object' ? opts.intercept : {}), port: interceptPort };
+  // A key that came from MB_APIKEY is deliberately NOT echoed onto the child's command line: the
+  // child already inherits that variable, so `--api-key` would copy the secret into a strictly more
+  // exposed channel (`/proc/<pid>/cmdline` is world-readable and argv is captured by `ps`, auditd
+  // and container runtimes; the environment slot it already occupies is none of those) without
+  // removing it from the original one. An explicitly-passed `apiKey` still goes on the command line
+  // as it always has — and clap gives that flag precedence over the inherited variable, which is
+  // what makes the option win engine-side too.
   const args = buildSpawnArgs(port, {
     host,
     loglevel: opts.loglevel,
@@ -267,7 +310,19 @@ export async function spawn(opts: SpawnOptions = {}): Promise<SpawnedEngine> {
     intercept,
   });
 
-  const proc = spawnProcess(binaryPath, args, {
+  // The child re-reads MB_APIKEY from the environment when it execs, which is a different read from
+  // the one resolveApiKey did — binary resolution can download in between. If the value moved, the
+  // engine and the admin client would disagree, and a *deletion* would be worse than a mismatch: the
+  // engine comes up keyless with an open admin plane while the client keeps sending the stale
+  // credential, so every call succeeds and the operator believes a key is in force. Fail closed.
+  if (opts.apiKey === undefined && process.env.MB_APIKEY !== apiKey) {
+    throw new InvalidDefinition(
+      'MB_APIKEY changed while the engine binary was being resolved, so the spawned engine and its ' +
+        'admin client would not agree on the admin key. Retry the spawn.'
+    );
+  }
+
+  const proc = deps.spawn(binaryPath, args, {
     stdio: ['ignore', 'pipe', 'pipe'],
     detached: false,
   });
@@ -309,7 +364,9 @@ export async function spawn(opts: SpawnOptions = {}): Promise<SpawnedEngine> {
     url,
     port,
     ...(interceptPort !== undefined ? { interceptPort } : {}),
-    client: new RemoteClient(url, opts.apiKey !== undefined ? { apiKey: opts.apiKey } : {}),
+    // The same resolved key the engine is running with — whether it arrived by option or by
+    // inherited MB_APIKEY. Building this client without it was issue #103's second failure mode.
+    client: new RemoteClient(url, apiKey === undefined ? {} : { apiKey }),
     close,
     async [Symbol.asyncDispose](): Promise<void> {
       await close();
