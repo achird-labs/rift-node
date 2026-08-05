@@ -19,6 +19,7 @@ import {
 // Type-only: erased at compile time (isolatedModules), so this does not create a runtime import
 // cycle even though ../engine.js imports `RemoteClient` (below) as its remote AdminApi impl.
 import type { AdminApi } from '../engine.js';
+import { assertApiKeyNotBlank } from '../apikey.js';
 
 /** Shape of the engine's JSON error envelope: `{ "errors": [{ "code": "...", "message": "..." }] }`. */
 interface EngineErrorBody {
@@ -32,7 +33,8 @@ export interface FlowScopedOptions {
 
 /** Construction options for {@link RemoteClient}. */
 export interface RemoteClientOptions {
-  /** Sent as `Authorization: Bearer <apiKey>` on every request. */
+  /** Sent as `Authorization: Bearer <apiKey>` on every request. A blank (empty or whitespace-only)
+   * value throws {@link InvalidDefinition} — omit it to send no `Authorization` header at all. */
   apiKey?: string;
   /** Base headers for every request. The API-key `authorization` (if any) and the per-request
    * `content-type` are applied on top, so they take precedence over a same-named entry here. */
@@ -52,6 +54,7 @@ export class RemoteClient implements AdminApi {
   readonly #timeoutMs: number;
 
   constructor(url: string, opts: RemoteClientOptions = {}) {
+    assertApiKeyNotBlank(opts.apiKey);
     this.url = url;
     this.#timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.#headers = { ...opts.headers };

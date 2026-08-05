@@ -946,7 +946,8 @@ export const MIN_ENGINE_VERSION = packageJson.minEngineVersion ?? '0.0.0';
 // --- entry points: rift.connect / rift.spawn / rift.embedded --------------------------------
 
 export interface ConnectOptions {
-  /** Sent as `Authorization: Bearer <apiKey>` on every admin request. */
+  /** Sent as `Authorization: Bearer <apiKey>` on every admin request. A blank (empty or
+   * whitespace-only) value throws {@link InvalidDefinition} — omit it to connect without auth. */
   apiKey?: string;
   headers?: Record<string, string>;
   /** Per-request timeout; default 30_000ms. */

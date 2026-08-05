@@ -21,7 +21,9 @@ import {
   fetchAndVerifyChecksum,
   extractedBinaryCandidates,
   buildSpawnArgs,
+  spawn,
 } from '../../src/spawn/index.js';
+import { InvalidDefinition } from '../../src/errors.js';
 
 const DEFAULT_BASE = 'https://github.com/achird-labs/rift/releases/download';
 
@@ -328,5 +330,53 @@ describe('spawn — remaining env overrides', () => {
       })
     ).rejects.toThrow(/air-?gap|RIFT_SKIP_BINARY_DOWNLOAD|offline/i);
     expect(download).not.toHaveBeenCalled();
+  });
+});
+
+// --- blank admin api key (issue #96, engine rift#862) -----------------------------------------
+//
+// A blank `--api-key` used to switch the engine's auth gate ON and then authenticate every
+// unauthenticated request. Engine >= 0.17.0 refuses to start instead; older engines still exhibit
+// the open-admin-plane bug. Rejecting it in the SDK gives the same fail-closed answer on every
+// engine, and names the offending option instead of surfacing a child-process exit code.
+
+describe('spawn — blank apiKey is rejected (issue #96)', () => {
+  it('buildSpawnArgs rejects an empty apiKey', () => {
+    expect(() => buildSpawnArgs(2525, { apiKey: '' })).toThrow(InvalidDefinition);
+  });
+
+  it('buildSpawnArgs rejects a whitespace-only apiKey', () => {
+    expect(() => buildSpawnArgs(2525, { apiKey: '   ' })).toThrow(InvalidDefinition);
+    expect(() => buildSpawnArgs(2525, { apiKey: '\t\n' })).toThrow(InvalidDefinition);
+  });
+
+  it('passes a key containing spaces through untrimmed — only blank keys are invalid', () => {
+    expect(buildSpawnArgs(2525, { apiKey: ' my key ' })).toEqual(
+      expect.arrayContaining(['--api-key', ' my key '])
+    );
+  });
+
+  it('omitting apiKey stays unchanged — no --api-key flag, no throw', () => {
+    expect(buildSpawnArgs(2525, {})).not.toContain('--api-key');
+  });
+
+  it('rejects unicode whitespace, not just ASCII', () => {
+    // Pins that the guard uses trim()'s full unicode reach — a hand-rolled ASCII-only "optimization"
+    // would let a non-breaking space through as if it were a real key.
+    expect(() => buildSpawnArgs(2525, { apiKey: ' ' })).toThrow(InvalidDefinition);
+    expect(() => buildSpawnArgs(2525, { apiKey: '　' })).toThrow(InvalidDefinition);
+  });
+
+  it('spawn() rejects a blank apiKey before it resolves a binary', async () => {
+    // RIFT_OFFLINE makes resolveBinary fail fast and deterministically with its own air-gap Error,
+    // so InvalidDefinition here can ONLY mean the guard ran first. Without it the assertion would
+    // still pass today, but by way of the host's PATH/cache/network rather than by construction.
+    await expect(
+      spawn({
+        apiKey: '',
+        binaryPath: '/nonexistent/rift-binary-issue-96',
+        env: { RIFT_OFFLINE: '1' },
+      })
+    ).rejects.toThrow(InvalidDefinition);
   });
 });

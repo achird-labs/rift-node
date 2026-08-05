@@ -3,6 +3,29 @@
 All notable changes to `@rift-vs/rift` are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+### Security
+
+- **A blank admin `apiKey` is now rejected** (issue #96). `rift.spawn({ apiKey })`,
+  `rift.connect(url, { apiKey })`, and `new RemoteClient(...)` throw `InvalidDefinition` when
+  `apiKey` is an empty or whitespace-only string; `spawn()` throws before it resolves or downloads
+  a binary. Omit `apiKey` entirely to run without admin auth — that behaviour is unchanged, as is a
+  key that merely *contains* spaces (it is compared byte for byte and never trimmed).
+
+  This tracks engine rift#862, shipped in **rift v0.17.0**: a blank `--api-key` used to switch the
+  admin auth gate *on* and then match every unauthenticated request, leaving the plane open while
+  reporting as protected. Engines from v0.17.0 refuse to start; earlier engines still exhibit the
+  bug, so guarding the `apiKey` **option** gives the same fail-closed answer on every engine version
+  and names the offending option instead of surfacing an opaque child-process exit code. The most
+  common way to hit this is an unset environment variable (`apiKey: process.env.KEY ?? ''`).
+
+  Scope: this guards the `apiKey` option only. A spawned engine also reads `MB_APIKEY` from the
+  inherited environment, which the SDK does not inspect; a blank value there is caught by the engine
+  itself on v0.17.0+ (its startup error names `MB_APIKEY` explicitly).
+
+  The embedded transport is unaffected — its admin plane has always used a generated UUID key.
+
 ## 0.15.0 — 2026-07-21
 
 First release of `@rift-vs/rift` from the `achird-labs/rift-node` repository. Everything below had

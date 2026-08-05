@@ -120,7 +120,8 @@ export const rift: {
 };
 
 interface ConnectOptions {
-  apiKey?: string;                    // Authorization header for the admin plane
+  apiKey?: string;                    // Authorization header for the admin plane; blank (empty
+                                      // or whitespace-only) throws InvalidDefinition — omit instead
   headers?: Record<string, string>;
   timeoutMs?: number;                 // per-request; default 30_000
   versionCheck?: 'fail' | 'warn' | 'off';  // default 'fail'; compares GET /config to minEngineVersion
@@ -634,7 +635,9 @@ interface SpawnOptions {
   version?: string; binaryPath?: string; env?: Record<string, string>; mirror?: string;
   startupTimeoutMs?: number; shutdownTimeoutMs?: number;
   allowInjection?: boolean;                       // --allow-injection
-  apiKey?: string;                                // --api-key (also used by the client)
+  apiKey?: string;                                // --api-key (also used by the client); blank
+                                                  // throws InvalidDefinition before the binary
+                                                  // is resolved — omit to run without admin auth
   localOnly?: boolean; ipWhitelist?: string[]; origin?: string;
   datadir?: string; configfile?: string;
   defaultTls?: { cert: string; key: string };     // --default-tls-cert/key

@@ -436,3 +436,21 @@ describe('issue #21 — rift.connect version preflight', () => {
     await engine.close();
   });
 });
+
+// The guard lives in the RemoteClient constructor, so the facade is covered by construction — but
+// only if `connect()` doesn't reach the network first. This pins that it throws before the version
+// preflight, which would otherwise turn a blank key into a confusing connectivity/version error.
+describe('rift.connect — blank apiKey is rejected before any request (issue #96)', () => {
+  it('rejects an empty apiKey without calling fetch', async () => {
+    const { rift } = await import('../../src/index.js');
+    const { InvalidDefinition } = await import('../../src/errors.js');
+    const fetchMock = jest.fn(async () => new Response('{}', { status: 200 }));
+    // @ts-expect-error override global for the test
+    globalThis.fetch = fetchMock;
+
+    await expect(rift.connect('http://localhost:2525', { apiKey: '' })).rejects.toThrow(
+      InvalidDefinition
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
