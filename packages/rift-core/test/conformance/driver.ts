@@ -21,10 +21,20 @@ function buildUrl(base: string, request: InteractionRequest): URL {
   return url;
 }
 
-function toFetchInit(request: InteractionRequest): RequestInit {
+/**
+ * A STRING body is already the raw wire payload and is sent verbatim; any other JSON value is
+ * serialized. Stringifying a string too would double-encode it — `{"type":"order"}` would go out as
+ * the JSON string `"{\"type\":\"order\"}"`, so the engine's `jsonpath`/`xpath` predicates see a
+ * quoted scalar instead of a document and silently fail to match. The sdk-conformance corpus authors
+ * request bodies as raw strings (including XML, which is not JSON at all), so this distinction is
+ * load-bearing there; the inline local fixtures send no request bodies.
+ */
+export function toFetchInit(request: InteractionRequest): RequestInit {
   const init: RequestInit = { method: request.method };
   if (request.headers !== undefined) init.headers = request.headers;
-  if (request.body !== undefined) init.body = JSON.stringify(request.body);
+  if (request.body !== undefined) {
+    init.body = typeof request.body === 'string' ? request.body : JSON.stringify(request.body);
+  }
   return init;
 }
 

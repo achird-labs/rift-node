@@ -26,6 +26,25 @@ The unit tests are hermetic. The integration tests self-skip unless a rift binar
 discoverable (via `RIFT_BINARY_PATH`, `PATH`, or the downloaded `binaries/` copy). Set
 `RIFT_SKIP_BINARY_DOWNLOAD=1` to skip the postinstall binary download (CI does this).
 
+### Replaying the sdk-conformance corpus
+
+`RIFT_CORPUS_DIR` points the conformance suite at an extracted
+`sdk-conformance-<version>.tar.gz` (a per-release asset of the engine repo) — the same corpus the
+java and go SDK lanes replay. Point it at the directory holding `manifest.json`:
+
+```sh
+gh release download v0.17.0 --repo achird-labs/rift --pattern 'sdk-conformance-*.tar.gz'
+tar -xzf sdk-conformance-v0.17.0.tar.gz
+RIFT_CORPUS_DIR=$PWD/sdk-conformance-v0.17.0 npm test -w @rift-vs/rift
+```
+
+Each manifest fixture then becomes its own spec in both transport lanes. Unset, the suite falls back
+to the local `test/fixtures/mb` fixtures — but **set-but-invalid is a hard error, never a fallback**:
+a lane that asked for corpus replay and quietly replayed two local fixtures instead would report
+green having proved nothing. Fixtures are skipped only for a capability the lane lacks, per the
+corpus's own contract; here that means the two `proxy` fixtures (no upstream is provisioned), so 13
+of the 15 replay.
+
 ## Versioning
 
 - The `package.json` version is the **next intended stable target** (currently `0.12.1`),
