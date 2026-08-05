@@ -134,6 +134,56 @@ describe('conformance — DSL expressibility gate (issue #7)', () => {
   });
 });
 
+// --- vendored-fixture integrity: stub ordering (issue #94, rift#805) --------------------------
+//
+// Stub matching is first-match-wins, so a general stub sitting ahead of a more specific one leaves
+// the specific stub permanently dead. rift#805 fixed exactly that in the upstream example. These
+// assertions pin the invariant, so re-vendoring a stale copy of the example fails here instead of
+// silently shipping unreachable stubs.
+
+interface WireStub {
+  scenarioName?: string;
+  predicates?: Array<Record<string, unknown>>;
+}
+
+function stubsOf(fixtureName: string): WireStub[] {
+  const json = readMbFixtureJson(fixtureName) as { imposters?: Array<{ stubs?: WireStub[] }> };
+  const stubs = json.imposters?.[0]?.stubs;
+  if (!Array.isArray(stubs)) throw new Error(`fixture ${fixtureName} has no imposters[0].stubs array`);
+  return stubs;
+}
+
+function scenarioIndex(fixtureName: string, stubs: WireStub[], scenarioName: string): number {
+  const index = stubs.findIndex((s) => s.scenarioName === scenarioName);
+  if (index < 0) {
+    throw new Error(`fixture ${fixtureName} has no stub with scenarioName ${scenarioName}`);
+  }
+  return index;
+}
+
+describe('conformance — vendored fixture stub ordering (issue #94, rift#805)', () => {
+  const FIXTURE = 'task-management-api.json';
+
+  it('task-management-api.json places each specific stub before the general one that shadows it', () => {
+    const stubs = stubsOf(FIXTURE);
+    expect(scenarioIndex(FIXTURE, stubs, 'TaskAPI-GetTasks-FilterByStatus')).toBeLessThan(
+      scenarioIndex(FIXTURE, stubs, 'TaskAPI-GetTasks-Success')
+    );
+    expect(scenarioIndex(FIXTURE, stubs, 'TaskAPI-GetTaskById-NotFound')).toBeLessThan(
+      scenarioIndex(FIXTURE, stubs, 'TaskAPI-GetTaskById-Success')
+    );
+  });
+
+  it('the task-999 not-found stub anchors its path so it cannot shadow other task ids', () => {
+    const stubs = stubsOf(FIXTURE);
+    const notFound = stubs[scenarioIndex(FIXTURE, stubs, 'TaskAPI-GetTaskById-NotFound')];
+    const paths = (notFound.predicates ?? [])
+      .map((p) => (p.matches as { path?: string } | undefined)?.path)
+      .filter((p): p is string => typeof p === 'string');
+    expect(paths).toEqual(['^/tasks/task-999$']);
+  });
+});
+
 describe('conformance gate — failure modes (acceptance criterion)', () => {
   it('a fixture with no coverage entry and no fromJsonOnly entry is named in the failure', () => {
     expect(() => assertAccounted('ghost-fixture.json', dslCoverage, fromJsonOnly)).toThrow(
