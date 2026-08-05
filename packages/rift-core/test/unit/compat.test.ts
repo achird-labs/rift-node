@@ -348,3 +348,95 @@ describe('issue #108 — create() guards the ambient MB_APIKEY it hands the chil
     }
   });
 });
+
+// Issue #116 gap 2. create() validated the ambient MB_APIKEY at entry, then awaited
+// resolveEngineBinary() - which can run a real download - and only then spawned. deps.spawn() reads
+// process.env fresh at exec, so a value blanked inside that window reached the child unchecked,
+// after create() had already told the caller the key checked out.
+
+describe('issue #116 — create() re-checks MB_APIKEY after binary resolution', () => {
+  const saved = process.env.MB_APIKEY;
+
+  afterEach(() => {
+    if (saved === undefined) delete process.env.MB_APIKEY;
+    else process.env.MB_APIKEY = saved;
+  });
+
+  /** Mutates MB_APIKEY *during* binary resolution — the window the second check exists to close. */
+  function depsMutatingDuringResolve(mutate: () => void): { deps: CreateDeps; spawn: jest.Mock } {
+    const spawn = jest.fn(() => {
+      throw new Error('spawn must not be called — create() should reject after re-checking');
+    });
+    return {
+      deps: {
+        spawn: spawn as unknown as typeof spawnProcess,
+        resolveEngineBinary: async () => {
+          mutate();
+          return '/fake/rift-binary';
+        },
+      },
+      spawn,
+    };
+  }
+
+  it.each([
+    ['emptied', ''],
+    ['blanked to whitespace', '   '],
+  ])('rejects an MB_APIKEY %s while the binary was being resolved', async (_label, value) => {
+    process.env.MB_APIKEY = 'real-key';
+    const { deps, spawn } = depsMutatingDuringResolve(() => {
+      process.env.MB_APIKEY = value;
+    });
+
+    const err = await create({ port: 2525 }, deps).catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(InvalidDefinition);
+    expect((err as Error).message).toMatch(/MB_APIKEY environment variable/);
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['changed to a different real key', 'other-key'],
+    ['deleted outright', undefined],
+  ])('allows an MB_APIKEY %s mid-resolution — only a blank one matters here', async (_label, value) => {
+    // Deliberately NOT spawn()'s stricter exact-value re-check: that one exists to keep the engine
+    // and the SDK-built admin client on one key, and create() builds no admin client. A changed or
+    // absent key is legitimate here; a blank one is what the engine refuses.
+    process.env.MB_APIKEY = 'real-key';
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = jest
+      .fn()
+      .mockResolvedValue({ status: 200 } as Response) as unknown as typeof fetch;
+    const child = Object.assign(new EventEmitter(), {
+      stdout: new EventEmitter(),
+      stderr: new EventEmitter(),
+      kill: jest.fn(() => true),
+    });
+    const spawn = jest.fn(() => child as unknown as ChildProcess);
+    const deps: CreateDeps = {
+      spawn: spawn as unknown as typeof spawnProcess,
+      resolveEngineBinary: async () => {
+        if (value === undefined) delete process.env.MB_APIKEY;
+        else process.env.MB_APIKEY = value;
+        return '/fake/rift-binary';
+      },
+    };
+
+    try {
+      await create({ port: 45722 }, deps);
+      expect(spawn).toHaveBeenCalledTimes(1);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
+  it('rejects a key blanked to a NEL, which the engine trims but JavaScript does not', async () => {
+    process.env.MB_APIKEY = 'real-key';
+    const { deps, spawn } = depsMutatingDuringResolve(() => {
+      process.env.MB_APIKEY = '\u0085';
+    });
+
+    await expect(create({ port: 2525 }, deps)).rejects.toThrow(InvalidDefinition);
+    expect(spawn).not.toHaveBeenCalled();
+  });
+});

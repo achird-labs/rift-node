@@ -7,6 +7,27 @@ All notable changes to `@rift-vs/rift` are documented here. This project adheres
 
 ### Fixed
 
+- **The blank-admin-key guard now agrees with the engine on U+0085, and `create()` re-checks after
+  binary resolution** (issue #116). Two gaps left over from issues #103/#108:
+
+  The guard called a key blank using JavaScript's `String.prototype.trim`, but the engine uses Rust's
+  `str::trim`, whose `White_Space` set includes U+0085 (NEL) where JavaScript's does not. A key
+  holding only a NEL therefore passed the SDK and was then refused by the engine itself — an opaque
+  `Rift process exited with code N` in place of the friendly `InvalidDefinition` that issue #108
+  exists to produce. "Blank" is now the union of both dialects, so the SDK refuses everything either
+  side would. The one remaining divergence runs the safe way: a key of only U+FEFF is refused here
+  though the engine would accept it, which costs a respelling rather than an open admin plane. A key
+  that merely *contains* either code point is still a real key and is passed through untouched.
+
+  Separately, compat `create()` validated the ambient `MB_APIKEY` at entry and then awaited binary
+  resolution — which can run a real download — before spawning, while the child re-reads the variable
+  at exec. A value blanked inside that window reached the engine unchecked, after `create()` had
+  already told the caller the key was good. It is re-checked after resolution now. Deliberately not
+  `spawn()`'s stricter exact-value comparison: that exists to keep the engine and the SDK-built admin
+  client on one key and `create()` builds no admin client, so a key that merely changed or was unset
+  mid-flight still proceeds. Only a blanked one is refused — and it matters because `findBinary()`
+  can surface a pre-0.17 engine, which opens its admin plane rather than refusing to start.
+
 - **Every outbound admin payload is now JSON-safe, on both transports** (issue #112). The wire
   serializer documented a guarantee — a non-finite number is refused rather than silently emitted as
   `null`, a `bigint`/function/symbol raises a typed `WireValidationError` rather than a raw
