@@ -11,6 +11,7 @@ import { type ChildProcess, spawn as spawnProcess } from 'child_process';
 import net from 'net';
 import { RemoteClient } from '../remote/index.js';
 import { InvalidDefinition } from '../errors.js';
+import { assertApiKeyNotBlank } from '../apikey.js';
 import type { InterceptOptions } from '../intercept/types.js';
 import { resolveBinary, type EnvRecord } from './resolve.js';
 
@@ -39,6 +40,7 @@ export function buildSpawnArgs(
     intercept?: boolean | InterceptOptions;
   } = {}
 ): string[] {
+  assertApiKeyNotBlank(opts.apiKey);
   const args = ['--port', String(port)];
   if (opts.host) {
     args.push('--host', opts.host);
@@ -109,7 +111,14 @@ export interface SpawnOptions {
   shutdownTimeoutMs?: number;
   /** --allow-injection */
   allowInjection?: boolean;
-  /** --api-key (also used by the client for the Authorization header). */
+  /** --api-key (also used by the client for the Authorization header). A blank (empty or
+   * whitespace-only) value throws {@link InvalidDefinition} before the binary is resolved — omit it
+   * to run without admin auth.
+   *
+   * The engine also honours an `MB_APIKEY` env var, which the child inherits from *this* process
+   * (`opts.env` below is consumed by binary resolution only and is not passed to the child). That
+   * door is not guarded here; on engine v0.17.0+ a blank value there fails the engine's own
+   * startup validation. */
   apiKey?: string;
   /** --local-only */
   localOnly?: boolean;
@@ -225,6 +234,10 @@ export async function spawn(opts: SpawnOptions = {}): Promise<SpawnedEngine> {
   const host = opts.host ?? DEFAULT_HOST;
   const startupTimeoutMs = opts.startupTimeoutMs ?? DEFAULT_STARTUP_TIMEOUT_MS;
   const shutdownTimeoutMs = opts.shutdownTimeoutMs ?? DEFAULT_SHUTDOWN_TIMEOUT_MS;
+
+  // Ahead of resolveBinary: a blank key is a caller mistake, so it should not cost a binary
+  // download to discover, and the engine would only report it as an opaque child-process exit.
+  assertApiKeyNotBlank(opts.apiKey);
 
   const binaryPath = await resolveBinary({
     version: opts.version,

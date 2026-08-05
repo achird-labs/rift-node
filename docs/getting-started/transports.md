@@ -81,6 +81,14 @@ For an engine already running elsewhere: a CI service container, a shared dev in
 spawned or loaded — `connect()` only builds an HTTP client against `url`. `apiKey` is sent as
 `Authorization: Bearer <apiKey>` when the server enforces one (started with `--api-key`).
 
+> **A blank `apiKey` is rejected.** Passing an empty or whitespace-only string throws
+> `InvalidDefinition`; omit the option entirely to run without admin auth. This matters most for the
+> `process.env.RIFT_API_KEY` pattern below: an *unset* variable is `undefined` and is fine, but a
+> variable set to the empty string is not. Engine v0.17.0 and later refuse to start with a blank
+> `--api-key` (rift#862); on earlier engines a blank key switched the auth gate on and then
+> authenticated every request, so the SDK rejects it on both. A key that merely *contains* spaces is
+> valid and is never trimmed.
+
 ```ts
 import { rift, imposter, onGet, okJson } from '@rift-vs/rift';
 

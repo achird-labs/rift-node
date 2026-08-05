@@ -11,6 +11,7 @@
 import { jest } from '@jest/globals';
 import {
   connect,
+  RemoteClient,
   RiftError,
   InvalidDefinition,
   EngineUnavailable,
@@ -289,5 +290,47 @@ describe('remote — use-after-close is a loud error', () => {
     expect(c.closed).toBe(true);
     await expect(c.listImposters()).rejects.toBeInstanceOf(RiftError);
     await expect(c.getFlowState(1, 'f', 'k')).rejects.toBeInstanceOf(RiftError);
+  });
+});
+
+// --- blank admin api key (issue #96, engine rift#862) -----------------------------------------
+//
+// A blank key is never a meaningful credential: it produces `Authorization: Bearer ` and, against
+// an engine older than 0.17.0, matches a blank configured key — authenticating anonymously. The
+// common way to reach here is an unset env var (`apiKey: process.env.KEY ?? ''`), which is exactly
+// the case that must fail loudly rather than quietly build an unauthenticated client.
+
+describe('remote — blank apiKey is rejected (issue #96)', () => {
+  it('rejects an empty apiKey', () => {
+    expect(() => new RemoteClient('http://localhost:2525', { apiKey: '' })).toThrow(
+      InvalidDefinition
+    );
+  });
+
+  it('rejects a whitespace-only apiKey', () => {
+    expect(() => new RemoteClient('http://localhost:2525', { apiKey: '   ' })).toThrow(
+      InvalidDefinition
+    );
+    expect(() => new RemoteClient('http://localhost:2525', { apiKey: '\t\n' })).toThrow(
+      InvalidDefinition
+    );
+  });
+
+  it('accepts a key containing spaces and sends it untrimmed', async () => {
+    const fetchMock = mockFetch(new Response(JSON.stringify({}), { status: 200 }));
+    const client = new RemoteClient('http://localhost:2525', { apiKey: ' my key ' });
+    await client.config();
+    const headers = (fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1]
+      .headers as Record<string, string>;
+    expect(headers['authorization']).toBe('Bearer  my key ');
+  });
+
+  it('omitting apiKey stays unchanged — no authorization header, no throw', async () => {
+    const fetchMock = mockFetch(new Response(JSON.stringify({}), { status: 200 }));
+    const client = new RemoteClient('http://localhost:2525', {});
+    await client.config();
+    const init = (fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1];
+    const headers = (init.headers ?? {}) as Record<string, string>;
+    expect(headers['authorization']).toBeUndefined();
   });
 });
