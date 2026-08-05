@@ -8,7 +8,11 @@
  */
 
 import { jest } from '@jest/globals';
+import type { ChildProcess } from 'child_process';
 import { createHash } from 'crypto';
+import { EventEmitter } from 'events';
+import http from 'http';
+import type { AddressInfo } from 'net';
 import path from 'path';
 import {
   resolveBinary,
@@ -21,6 +25,7 @@ import {
   fetchAndVerifyChecksum,
   extractedBinaryCandidates,
   buildSpawnArgs,
+  resolveApiKey,
   spawn,
 } from '../../src/spawn/index.js';
 import { InvalidDefinition } from '../../src/errors.js';
@@ -375,6 +380,231 @@ describe('spawn — blank apiKey is rejected (issue #96)', () => {
       spawn({
         apiKey: '',
         binaryPath: '/nonexistent/rift-binary-issue-96',
+        env: { RIFT_OFFLINE: '1' },
+      })
+    ).rejects.toThrow(InvalidDefinition);
+  });
+});
+
+// Issue #103. The engine takes its admin key from `--api-key` OR the `MB_APIKEY` env var (clap
+// `env = "MB_APIKEY"`, flag wins), and the spawned child inherits this process's environment. The
+// SDK used to guard only the flag door, which broke two ways: a blank inherited key opened the auth
+// gate on engines <= 0.16.x, and a NON-blank one turned auth on engine-side while the SDK built its
+// client without a credential — so every admin call 401'd, on every engine version.
+
+describe('spawn — MB_APIKEY env contract (issue #103)', () => {
+  let saved: string | undefined;
+
+  beforeEach(() => {
+    saved = process.env.MB_APIKEY;
+    delete process.env.MB_APIKEY;
+  });
+
+  afterEach(() => {
+    if (saved === undefined) delete process.env.MB_APIKEY;
+    else process.env.MB_APIKEY = saved;
+  });
+
+  describe('resolveApiKey — mirrors clap precedence', () => {
+    it('falls back to MB_APIKEY when no apiKey option was passed', () => {
+      expect(resolveApiKey(undefined, { MB_APIKEY: 'from-env' })).toBe('from-env');
+    });
+
+    it('an explicit apiKey option beats MB_APIKEY', () => {
+      expect(resolveApiKey('from-option', { MB_APIKEY: 'from-env' })).toBe('from-option');
+    });
+
+    it('a valid apiKey option wins even over a blank MB_APIKEY — the flag door is authoritative', () => {
+      expect(resolveApiKey('from-option', { MB_APIKEY: '' })).toBe('from-option');
+    });
+
+    it('neither set → undefined, i.e. run without admin auth (unchanged behaviour)', () => {
+      expect(resolveApiKey(undefined, {})).toBeUndefined();
+    });
+
+    it('rejects a blank inherited MB_APIKEY, naming the env var rather than the option', () => {
+      expect(() => resolveApiKey(undefined, { MB_APIKEY: '' })).toThrow(InvalidDefinition);
+      expect(() => resolveApiKey(undefined, { MB_APIKEY: '   ' })).toThrow(InvalidDefinition);
+      expect(() => resolveApiKey(undefined, { MB_APIKEY: '\t\n' })).toThrow(InvalidDefinition);
+      expect(() => resolveApiKey(undefined, { MB_APIKEY: '　' })).toThrow(InvalidDefinition);
+      expect(() => resolveApiKey(undefined, { MB_APIKEY: '' })).toThrow(/MB_APIKEY/);
+    });
+
+    it('still names the option when the blank key came through that door', () => {
+      expect(() => resolveApiKey('', {})).toThrow(/apiKey/);
+    });
+
+    it('reads the real process.env by default', () => {
+      process.env.MB_APIKEY = 'ambient';
+      expect(resolveApiKey(undefined)).toBe('ambient');
+    });
+  });
+
+  // These drive the REAL spawn() rather than composing the helpers by hand. That distinction is the
+  // point: issue #103's second failure mode was spawn() building its client from `opts.apiKey`
+  // instead of the resolved key, and a test that only exercises the helpers stays green through
+  // exactly that regression. A fake launcher (the SpawnDeps seam, mirroring compat.create()'s
+  // CreateDeps) plus a stub admin server keeps it in the unit lane, which CI always runs — the
+  // spawn-lane integration specs self-skip without an engine binary.
+  describe('spawn() wiring — the resolved key reaches both the engine and the client', () => {
+    /** Stands in for the engine process: never really launched, exits cleanly on close(). */
+    function fakeChild(): ChildProcess {
+      const child = new EventEmitter() as unknown as ChildProcess;
+      return Object.assign(child, { stderr: null, stdout: null, exitCode: 0, signalCode: null, kill: () => true });
+    }
+
+    /** A stub admin plane, so the real waitForAdmin readiness poll succeeds and the client has
+     * something to send its Authorization header to. */
+    async function stubAdmin(): Promise<{ port: number; authHeaders: (string | undefined)[]; close: () => Promise<void> }> {
+      const authHeaders: (string | undefined)[] = [];
+      const server = http.createServer((req, res) => {
+        authHeaders.push(req.headers.authorization);
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ imposters: [] }));
+      });
+      await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+      const { port } = server.address() as AddressInfo;
+      return {
+        port,
+        authHeaders,
+        close: () => new Promise<void>((resolve) => server.close(() => resolve())),
+      };
+    }
+
+    async function spawnAgainstStub(
+      admin: { port: number },
+      opts: Parameters<typeof spawn>[0] = {},
+      duringResolve?: () => void
+    ): Promise<{ engine: Awaited<ReturnType<typeof spawn>>; args: string[] }> {
+      let args: string[] = [];
+      const engine = await spawn(
+        // process.execPath is simply a path that exists, so resolveBinary short-circuits to it
+        // without any download; the fake launcher means it is never actually executed.
+        { ...opts, port: admin.port, binaryPath: process.execPath },
+        {
+          resolveBinary: async () => {
+            // Stands in for the await window a real binary download opens up.
+            duringResolve?.();
+            return process.execPath;
+          },
+          spawn: (_bin, spawnArgs) => {
+            args = spawnArgs as string[];
+            return fakeChild();
+          },
+        }
+      );
+      return { engine, args };
+    }
+
+    it('sends an inherited MB_APIKEY as the client Authorization header', async () => {
+      process.env.MB_APIKEY = 'ambient-secret';
+      const admin = await stubAdmin();
+      try {
+        const { engine } = await spawnAgainstStub(admin);
+        await engine.client.listImposters();
+        await engine.close();
+        expect(admin.authHeaders).toContain('Bearer ambient-secret');
+      } finally {
+        await admin.close();
+      }
+    });
+
+    it('keeps an inherited key off the child command line — the child inherits the env instead', async () => {
+      // /proc/<pid>/cmdline is world-readable and argv is captured by ps/auditd, so echoing an
+      // already-inherited secret onto it would widen exposure for no gain.
+      process.env.MB_APIKEY = 'ambient-secret';
+      const admin = await stubAdmin();
+      try {
+        const { engine, args } = await spawnAgainstStub(admin);
+        await engine.close();
+        expect(args).not.toContain('--api-key');
+        expect(args.join(' ')).not.toContain('ambient-secret');
+      } finally {
+        await admin.close();
+      }
+    });
+
+    it('an explicit apiKey option beats MB_APIKEY in the argv AND the client', async () => {
+      process.env.MB_APIKEY = 'ambient-secret';
+      const admin = await stubAdmin();
+      try {
+        const { engine, args } = await spawnAgainstStub(admin, { apiKey: 'explicit-key' });
+        await engine.client.listImposters();
+        await engine.close();
+        expect(args).toEqual(expect.arrayContaining(['--api-key', 'explicit-key']));
+        expect(args.join(' ')).not.toContain('ambient-secret');
+        expect(admin.authHeaders).toContain('Bearer explicit-key');
+      } finally {
+        await admin.close();
+      }
+    });
+
+    it('fails closed if MB_APIKEY is deleted while the binary is being resolved', async () => {
+      // The dangerous branch: the engine would exec with no key at all (open admin plane) while the
+      // client kept sending the stale credential the engine ignores — every call succeeds and the
+      // operator believes auth is on. That silent downgrade must not be reachable.
+      process.env.MB_APIKEY = 'ambient-secret';
+      const admin = await stubAdmin();
+      try {
+        await expect(
+          spawnAgainstStub(admin, {}, () => {
+            delete process.env.MB_APIKEY;
+          })
+        ).rejects.toThrow(InvalidDefinition);
+      } finally {
+        await admin.close();
+      }
+    });
+
+    it('fails closed if MB_APIKEY changes while the binary is being resolved', async () => {
+      process.env.MB_APIKEY = 'ambient-secret';
+      const admin = await stubAdmin();
+      try {
+        await expect(
+          spawnAgainstStub(admin, {}, () => {
+            process.env.MB_APIKEY = 'a-different-secret';
+          })
+        ).rejects.toThrow(InvalidDefinition);
+      } finally {
+        await admin.close();
+      }
+    });
+
+    it('an explicit apiKey option is immune to the env moving — it never read it', async () => {
+      const admin = await stubAdmin();
+      try {
+        const { engine } = await spawnAgainstStub(admin, { apiKey: 'explicit-key' }, () => {
+          process.env.MB_APIKEY = 'appeared-midflight';
+        });
+        await engine.client.listImposters();
+        await engine.close();
+        expect(admin.authHeaders).toContain('Bearer explicit-key');
+      } finally {
+        await admin.close();
+      }
+    });
+
+    it('no key on either door → no --api-key and no Authorization header', async () => {
+      const admin = await stubAdmin();
+      try {
+        const { engine, args } = await spawnAgainstStub(admin);
+        await engine.client.listImposters();
+        await engine.close();
+        expect(args).not.toContain('--api-key');
+        expect(admin.authHeaders.every((h) => h === undefined)).toBe(true);
+      } finally {
+        await admin.close();
+      }
+    });
+  });
+
+  it('spawn() rejects a blank inherited MB_APIKEY before it resolves a binary', async () => {
+    // Same construction as the #96 test above: RIFT_OFFLINE makes resolveBinary fail with its own
+    // air-gap Error, so an InvalidDefinition can only mean the env guard ran first.
+    process.env.MB_APIKEY = '';
+    await expect(
+      spawn({
+        binaryPath: '/nonexistent/rift-binary-issue-103',
         env: { RIFT_OFFLINE: '1' },
       })
     ).rejects.toThrow(InvalidDefinition);

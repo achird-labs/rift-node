@@ -60,11 +60,41 @@ All notable changes to `@rift-vs/rift` are documented here. This project adheres
   and names the offending option instead of surfacing an opaque child-process exit code. The most
   common way to hit this is an unset environment variable (`apiKey: process.env.KEY ?? ''`).
 
-  Scope: this guards the `apiKey` option only. A spawned engine also reads `MB_APIKEY` from the
-  inherited environment, which the SDK does not inspect; a blank value there is caught by the engine
-  itself on v0.17.0+ (its startup error names `MB_APIKEY` explicitly).
-
   The embedded transport is unaffected — its admin plane has always used a generated UUID key.
+
+- **`rift.spawn()` now mirrors the engine's `MB_APIKEY` contract** (issue #103). The engine takes
+  its admin key from `--api-key` **or** the `MB_APIKEY` environment variable, and the spawned child
+  inherits this process's environment — so that variable was already engine configuration while the
+  SDK behaved as though it did not exist. `spawn()` now resolves one effective key,
+  `apiKey ?? process.env.MB_APIKEY`, with the same precedence clap applies (an explicit option
+  always wins, so nothing changes for callers who pass one).
+
+  That closes two holes. A **blank** inherited `MB_APIKEY` now throws `InvalidDefinition` naming
+  `MB_APIKEY`, before a binary is resolved — previously it opened the auth gate on engines
+  <= 0.16.x (rift#862) and produced an opaque child-process exit on v0.17.0+. A **non-blank** one is
+  now used for the admin client's `Authorization` header: previously the engine enabled auth while
+  the SDK's client was built without a credential, so `spawn()` appeared to succeed —
+  `waitForAdmin` accepts any response, including a 401 — and then **every** admin call failed, on
+  every engine version.
+
+  A key inherited from `MB_APIKEY` is deliberately **not** echoed onto the child's command line; the
+  child already inherits the variable, and `--api-key` would copy the secret into a materially more
+  exposed channel (`/proc/<pid>/cmdline` is world-readable; argv is captured by `ps`, auditd and
+  container runtimes) without removing it from the original. An explicitly-passed `apiKey` is still
+  sent as `--api-key`, exactly as before.
+
+  If `MB_APIKEY` is mutated *while* the engine binary is being resolved (a window a cold-cache
+  download can hold open for seconds), `spawn()` now fails closed with `InvalidDefinition` instead of
+  launching. Deleting it mid-flight was the worst case: the engine would have come up keyless with an
+  open admin plane while the client kept sending the stale credential it ignores, so every call would
+  have succeeded and the operator would have believed a key was in force.
+
+  The blank-key error now names the door the key came through (`apiKey option` vs
+  `MB_APIKEY environment variable`) instead of always saying `apiKey`.
+
+  Scope: this covers the `rift.spawn()` transport. The Mountebank-compat `create()` entry point
+  spawns its own child and has no api-key handling of its own, so a blank inherited `MB_APIKEY`
+  still reaches the engine unguarded there (tracked separately).
 
 ## 0.15.0 — 2026-07-21
 

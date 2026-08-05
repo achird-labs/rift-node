@@ -24,13 +24,24 @@ import { InvalidDefinition } from './errors.js';
  * on absurd inputs and both resolve safely — a key the engine would call blank is refused at its own
  * startup, and one this guard over-rejects simply has to be spelled without the stray code point.
  *
- * This guard does NOT see the engine's other doors. A blank key reaching a spawned engine through an
- * inherited `MB_APIKEY` environment variable is caught by the engine itself (v0.17.0+), not here.
+ * The engine's other door — an inherited `MB_APIKEY` environment variable — is guarded on the
+ * `rift.spawn()` transport only, by `resolveApiKey()` in `spawn/spawn.ts`, which resolves the
+ * effective key before calling this and passes the matching `source` (issue #103). The
+ * Mountebank-compat `create()` transport spawns its own child and does not go through that path,
+ * so a blank inherited value there still reaches the engine unguarded.
  */
-export function assertApiKeyNotBlank(apiKey: string | undefined): void {
-  if (apiKey !== undefined && apiKey.trim() === '') {
-    throw new InvalidDefinition(
-      'apiKey must not be blank: engine >= 0.17.0 refuses to start with one (rift#862), and older engines enable the auth gate and then authenticate every request. Omit apiKey entirely to run without admin auth.'
-    );
-  }
+export type ApiKeySource = 'apiKey option' | 'MB_APIKEY environment variable';
+
+export function assertApiKeyNotBlank(apiKey: string | undefined, source: ApiKeySource = 'apiKey option'): void {
+  if (apiKey === undefined || apiKey.trim() !== '') return;
+  // Name the door the key came through: the engine reads two, and only the caller knows which one
+  // they meant to set.
+  const remedy =
+    source === 'apiKey option'
+      ? 'Omit apiKey entirely to run without admin auth.'
+      : 'Unset MB_APIKEY, or give it a real value, to run without admin auth.';
+  throw new InvalidDefinition(
+    `${source} must not be blank: engine >= 0.17.0 refuses to start with one (rift#862), and older ` +
+      `engines enable the auth gate and then authenticate every request. ${remedy}`
+  );
 }
