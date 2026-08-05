@@ -598,6 +598,7 @@ interface InterceptHandle {
   readonly port: number;
   serve(match: string | wire.Predicate[], response: ResponseBuilder | wire.IsResponse): Promise<void>;
       // string = host shorthand → { host, action: { serve } }
+      // response is normalized to the engine's narrower wire.ServeStub (see below)
   forward(match: string | wire.Predicate[], to: ImposterHandle | number): Promise<void>;
   redirectTo(imposter: ImposterHandle): Promise<void>;    // catch-all forward rule
   rules(): Promise<wire.InterceptRule[]>;
@@ -609,6 +610,30 @@ interface InterceptHandle {
   env(): Promise<Record<string, string>>;                 // { HTTPS_PROXY, HTTP_PROXY, NODE_EXTRA_CA_CERTS }
 }
 ```
+
+`serve()` normalization (issue #101). The engine's serve action is a `ServeStub`
+(`statusCode: u16`, `headers: String -> String`, `body: Option<String>`), which is narrower than the
+Mountebank-shaped `IsResponse` the DSL builds — so `serve()` converts rather than passing it through:
+
+| Input | Result |
+|---|---|
+| `body` object/array/number/boolean | compact JSON string — `okJson({ok:true})` sends `'{"ok":true}'` |
+| `body` string | sent verbatim, never double-encoded |
+| `body` absent or `null` | omitted |
+| `statusCode` numeric string (`'404'`) | coerced to a number |
+| `_mode: 'text'`, unknown keys | dropped |
+| multi-value header (`string[]`) | **throws `InvalidDefinition`** — joining would corrupt `Set-Cookie` |
+| `_mode: 'binary'` or unrecognized | **throws `InvalidDefinition`** — the base64 would be served as literal text |
+| `statusCode` outside `100..999` | **throws `InvalidDefinition`** — the engine cannot render it as a status line |
+
+Use `forward()` to an imposter when you need a case in the bottom three rows, or `addRule()` to send
+a rule verbatim. Body key order follows your object; the imposter path re-serializes through Rust and
+emits sorted keys, so the two differ byte-wise (equivalent JSON) if a SUT hashes the body.
+
+The table covers what `serve()` itself refuses. Beyond it, the **engine** silently drops hop-by-hop
+headers (`Connection`, `Keep-Alive`, …) and any header whose value contains CR/LF, and it always
+computes `Content-Length`/`Connection` itself — so those never reach the SUT regardless of what you
+set here.
 
 Per-transport availability (documented, typed):
 - **embedded** — `engine.intercept(opts)` calls `rift_start_intercept` (idempotent handle reuse).

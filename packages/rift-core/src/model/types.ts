@@ -99,6 +99,23 @@ export interface IsResponse {
   [key: string]: unknown;
 }
 
+/**
+ * The engine's inline `serve` stub — deliberately narrower than {@link IsResponse}.
+ *
+ * `crates/rift-http-proxy/src/intercept_rules.rs` declares `status_code: u16`,
+ * `headers: HashMap<String, String>` and `body: Option<String>`, so an object body or a multi-value
+ * header is a serde error rather than a richer response. `InterceptHandle.serve()` normalizes an
+ * `IsResponse` into this shape; `addRule()` takes it verbatim.
+ */
+export interface ServeStub {
+  statusCode?: number;
+  headers?: { [name: string]: string };
+  /** `null` on the read path only: the engine's `body` is an `Option<String>` with no
+   * `skip_serializing_if`, so `GET /intercept/rules` reports an absent body as an explicit `null`. */
+  body?: string | null;
+  [key: string]: unknown;
+}
+
 export interface ProxyResponse {
   to: string;
   mode?: 'proxyAlways' | 'proxyOnce' | 'proxyTransparent' | string;
@@ -178,8 +195,10 @@ export interface RecordedRequest {
  * A rule with neither `host` nor `predicates` is a catch-all (see `InterceptHandle.redirectTo`).
  */
 export interface InterceptRule {
-  host?: string;
+  /** `null` on the read path only, for the same reason as {@link ServeStub.body}: the engine's
+   * `host` is an `Option<String>` with no `skip_serializing_if`. */
+  host?: string | null;
   predicates?: Predicate[];
-  action: { serve: IsResponse } | { forward: { port: number } };
+  action: { serve: ServeStub } | { forward: { port: number } };
   [key: string]: unknown;
 }
