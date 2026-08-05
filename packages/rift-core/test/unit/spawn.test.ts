@@ -27,8 +27,10 @@ import {
   buildSpawnArgs,
   resolveApiKey,
   spawn,
+  type SpawnDeps,
 } from '../../src/spawn/index.js';
 import { InvalidDefinition } from '../../src/errors.js';
+import { assertInterceptAuthValid } from '../../src/apikey.js';
 
 const DEFAULT_BASE = 'https://github.com/achird-labs/rift/releases/download';
 
@@ -650,5 +652,144 @@ describe('spawn — MB_APIKEY env contract (issue #103)', () => {
         env: { RIFT_OFFLINE: '1' },
       })
     ).rejects.toThrow(InvalidDefinition);
+  });
+});
+// Issue #115. The engine declares `--intercept-auth <USER:PASS>` with `env = "RIFT_INTERCEPT_AUTH"`
+// and the spawned child inherits this process's environment, so an ambient value is engine config
+// whether the caller meant it that way or not - the same door MB_APIKEY came through in #103. On
+// engine >= 0.17.0 (rift#885) a malformed or blank-halved value makes the child refuse to start,
+// and so does a perfectly valid one when no intercept listener was requested. Both surface through
+// the SDK as an opaque child exit, after a binary may have been downloaded.
+
+describe('spawn — RIFT_INTERCEPT_AUTH env contract (issue #115)', () => {
+  let saved: string | undefined;
+
+  beforeEach(() => {
+    saved = process.env.RIFT_INTERCEPT_AUTH;
+    delete process.env.RIFT_INTERCEPT_AUTH;
+  });
+
+  afterEach(() => {
+    if (saved === undefined) delete process.env.RIFT_INTERCEPT_AUTH;
+    else process.env.RIFT_INTERCEPT_AUTH = saved;
+  });
+
+  describe('assertInterceptAuthValid — the shape matrix', () => {
+    it.each([
+      ['no colon at all', 'userpass'],
+      ['empty', ''],
+      ['an empty username', ':pass'],
+      ['an empty password', 'user:'],
+      ['a whitespace-only username', '   :pass'],
+      ['a whitespace-only password', 'user:\t'],
+      ['a NEL-blanked password', 'user:\u0085'],
+      ['a NEL-blanked username', '\u0085:pass'],
+    ])('rejects a credential with %s', (_label, value) => {
+      expect(() => assertInterceptAuthValid(value, true)).toThrow(InvalidDefinition);
+      expect(() => assertInterceptAuthValid(value, true)).toThrow(/RIFT_INTERCEPT_AUTH/);
+    });
+
+    it('accepts a valid credential when a listener was requested', () => {
+      expect(() => assertInterceptAuthValid('user:pass', true)).not.toThrow();
+    });
+
+    it('accepts a password that itself contains colons — only the first splits', () => {
+      // `split_once(':')` engine-side, so everything after the first colon is the password.
+      expect(() => assertInterceptAuthValid('user:pa:ss', true)).not.toThrow();
+    });
+
+    it('does not trim a credential that merely has inner or edge spaces around real text', () => {
+      expect(() => assertInterceptAuthValid(' user : pass ', true)).not.toThrow();
+    });
+
+    it('rejects a VALID credential when no listener was requested', () => {
+      // The engine refuses this too (server.rs): a credential with no listener to guard reads as a
+      // protection that is not in force, and a later POST /intercept would bring up an open proxy.
+      expect(() => assertInterceptAuthValid('user:pass', false)).toThrow(InvalidDefinition);
+      expect(() => assertInterceptAuthValid('user:pass', false)).toThrow(/RIFT_INTERCEPT_AUTH/);
+    });
+
+    it('leaves an unset credential alone, listener or not', () => {
+      expect(() => assertInterceptAuthValid(undefined, true)).not.toThrow();
+      expect(() => assertInterceptAuthValid(undefined, false)).not.toThrow();
+    });
+  });
+
+  describe('spawn() applies it before resolving a binary', () => {
+    /** RIFT_OFFLINE makes resolveBinary fail with its own air-gap Error, so an InvalidDefinition
+     * here can only have come from the guard — and the guard runs before any port is opened. */
+    const spawnOffline = (extra: Record<string, unknown> = {}): Promise<unknown> =>
+      spawn({
+        binaryPath: '/nonexistent/rift-binary-issue-115',
+        env: { RIFT_OFFLINE: '1' },
+        ...extra,
+      });
+
+    it('rejects a malformed inherited credential', async () => {
+      process.env.RIFT_INTERCEPT_AUTH = 'userpass';
+      const err = await spawnOffline({ intercept: true }).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(InvalidDefinition);
+      expect((err as Error).message).toMatch(/RIFT_INTERCEPT_AUTH/);
+    });
+
+    it('rejects a valid credential when spawn() was not asked for a listener', async () => {
+      process.env.RIFT_INTERCEPT_AUTH = 'user:pass';
+      const err = await spawnOffline().catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(InvalidDefinition);
+    });
+
+    it('treats intercept: false as no listener', async () => {
+      process.env.RIFT_INTERCEPT_AUTH = 'user:pass';
+      const err = await spawnOffline({ intercept: false }).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(InvalidDefinition);
+    });
+
+    // The shape matrix above calls the guard directly, which bypasses the `opts.intercept` ->
+    // boolean mapping entirely. These drive the real spawn() through injected deps so a regression
+    // in that mapping (deleting the options-object branch, flipping a comparison) cannot ship green:
+    // resolveBinary being reached is proof the guard was satisfied, and no real child is ever run.
+    it.each([
+      ['intercept: true', true as const],
+      ['an intercept options object', { port: 6800 }],
+    ])('lets a valid credential through when %s asks for a listener', async (_label, intercept) => {
+      process.env.RIFT_INTERCEPT_AUTH = 'user:pass';
+      const resolveBinary = jest.fn(async () => {
+        throw new Error('reached binary resolution');
+      });
+      const spawnChild = jest.fn(() => {
+        throw new Error('spawn must not be reached in this test');
+      });
+      const err = await spawn(
+        { intercept },
+        {
+          resolveBinary: resolveBinary as unknown as SpawnDeps['resolveBinary'],
+          spawn: spawnChild as unknown as SpawnDeps['spawn'],
+        }
+      ).catch((e: unknown) => e);
+
+      expect(err).not.toBeInstanceOf(InvalidDefinition);
+      expect((err as Error).message).toBe('reached binary resolution');
+      expect(resolveBinary).toHaveBeenCalledTimes(1);
+    });
+
+    it('still refuses a valid credential through the same injected path when no listener is asked for', async () => {
+      // The negative half of the pair above — same wiring, only `intercept` differs, so this pins
+      // that the mapping is what decides and not something incidental.
+      process.env.RIFT_INTERCEPT_AUTH = 'user:pass';
+      const resolveBinary = jest.fn(async () => '/fake/rift-binary');
+      const spawnChild = jest.fn(() => {
+        throw new Error('spawn must not be reached');
+      });
+      const err = await spawn(
+        {},
+        {
+          resolveBinary: resolveBinary as unknown as SpawnDeps['resolveBinary'],
+          spawn: spawnChild as unknown as SpawnDeps['spawn'],
+        }
+      ).catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(InvalidDefinition);
+      expect(resolveBinary).not.toHaveBeenCalled();
+    });
   });
 });

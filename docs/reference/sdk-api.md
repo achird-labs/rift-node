@@ -694,6 +694,13 @@ interface SpawnOptions {
 }
 ```
 
+**`RIFT_INTERCEPT_AUTH`** (`user:pass`) is read from the environment by the engine, and the spawned
+child inherits it — there is no SDK option for it. Because the engine (>= 0.17.0) refuses to start on
+a malformed value, a blank half, *or* a valid credential with no listener to guard, the SDK checks it
+before resolving a binary and reports an `InvalidDefinition` instead of an opaque child exit. So an
+ambient value requires `intercept` to be requested: `rift.spawn()` without it, and compat `create()`
+(which never starts a listener), reject it. Unset the variable, or ask for a listener.
+
 `SpawnedEngine.close()` also closes its `AdminApi` client, so no usable client outlives a dead
 process.
 

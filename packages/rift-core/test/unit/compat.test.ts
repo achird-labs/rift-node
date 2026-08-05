@@ -440,3 +440,71 @@ describe('issue #116 — create() re-checks MB_APIKEY after binary resolution', 
     expect(spawn).not.toHaveBeenCalled();
   });
 });
+// Issue #115. compat create() never passes intercept flags, so on engine >= 0.17.0 ANY ambient
+// RIFT_INTERCEPT_AUTH - even a perfectly valid one - makes the child refuse to start, because the
+// engine rejects a credential with no listener to guard. Reported here instead, before a download.
+
+describe('issue #115 — create() guards the ambient RIFT_INTERCEPT_AUTH', () => {
+  const saved = process.env.RIFT_INTERCEPT_AUTH;
+
+  afterEach(() => {
+    if (saved === undefined) delete process.env.RIFT_INTERCEPT_AUTH;
+    else process.env.RIFT_INTERCEPT_AUTH = saved;
+  });
+
+  function spyDeps(): { deps: CreateDeps; spawn: jest.Mock; resolve: jest.Mock } {
+    const spawn = jest.fn(() => {
+      throw new Error('spawn must not be called — create() should reject first');
+    });
+    const resolve = jest.fn(async () => '/fake/rift-binary');
+    return {
+      deps: {
+        spawn: spawn as unknown as typeof spawnProcess,
+        resolveEngineBinary: resolve as unknown as () => Promise<string>,
+      },
+      spawn,
+      resolve,
+    };
+  }
+
+  it.each([
+    ['malformed (no colon)', 'userpass'],
+    ['blank-halved', 'user:'],
+    ['valid but with no listener create() can start', 'user:pass'],
+  ])('rejects an ambient RIFT_INTERCEPT_AUTH that is %s, before resolving a binary', async (_label, value) => {
+    process.env.RIFT_INTERCEPT_AUTH = value;
+    const { deps, spawn, resolve } = spyDeps();
+
+    const err = await create({ port: 2525 }, deps).catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(InvalidDefinition);
+    expect((err as Error).message).toMatch(/RIFT_INTERCEPT_AUTH/);
+    expect(resolve).not.toHaveBeenCalled();
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it('leaves an unset RIFT_INTERCEPT_AUTH alone and proceeds to spawn', async () => {
+    delete process.env.RIFT_INTERCEPT_AUTH;
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = jest
+      .fn()
+      .mockResolvedValue({ status: 200 } as Response) as unknown as typeof fetch;
+    const child = Object.assign(new EventEmitter(), {
+      stdout: new EventEmitter(),
+      stderr: new EventEmitter(),
+      kill: jest.fn(() => true),
+    });
+    const spawn = jest.fn(() => child as unknown as ChildProcess);
+    const deps: CreateDeps = {
+      spawn: spawn as unknown as typeof spawnProcess,
+      resolveEngineBinary: async () => '/fake/rift-binary',
+    };
+
+    try {
+      await create({ port: 45723 }, deps);
+      expect(spawn).toHaveBeenCalledTimes(1);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+});
