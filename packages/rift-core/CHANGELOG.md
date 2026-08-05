@@ -7,6 +7,30 @@ All notable changes to `@rift-vs/rift` are documented here. This project adheres
 
 ### Fixed
 
+- **`intercept.serve()` now refuses the headers the engine silently drops** (issue #107). The engine's
+  proxy skips four connection-management headers — `Host`, `Connection`, `Content-Length` and
+  `Transfer-Encoding`, matched case-insensitively — and skips any header whose **name or value**
+  contains CR or LF. The four are dropped with no trace at all; only the CR/LF case logs a warning,
+  and it logs it in the engine process where an SDK caller never sees it. Either way `serve()`
+  accepted the header, serialized it into the rule and returned success, so it simply never reached
+  the SUT with nothing on the SDK side to correlate against. Both now throw `InvalidDefinition`
+  naming the header — so a call that used to pass while quietly losing a header now fails loudly.
+
+  The guard mirrors the engine's own list rather than RFC 7230's: `Keep-Alive`, `TE` and `Upgrade` are
+  hop-by-hop by the spec but the engine passes them through, so `serve()` still sends them — refusing
+  them would have blocked headers the SUT would really have received. The errors do not offer
+  `forward()` as an alternative, because the engine applies the same four-name filter on the
+  forward-request and response-relay legs too; and a CR/LF-bearing header is unsendable in valid HTTP
+  regardless of path.
+
+  Also fixed here: a header literally named `__proto__` used to vanish inside the SDK itself, because
+  assigning it to a plain object hits the prototype setter instead of creating an own property. It is
+  now carried through (reachable whenever the caller's headers came from `JSON.parse`).
+
+  With those, `serve()` itself has no silent-drop case left. The verbatim `addRule()` escape hatch
+  still bypasses all of this validation by design — a hand-built rule can carry a header the engine
+  will drop, exactly as before.
+
 - **A non-finite number in a serialized body now throws instead of becoming `null`** (issue #106).
   `toWireString()`/`toWireJson()` documented that a non-serializable value is never silently
   dropped, but `jsonSafeReplacer` only inspected `function`/`bigint`/`symbol` — so `NaN`,
@@ -57,8 +81,7 @@ All notable changes to `@rift-vs/rift` are documented here. This project adheres
   500 and `'1e3'` as 1000. Use `forward()` to an imposter when you need any of the refused cases, or
   `addRule()` to send a rule verbatim.
 
-  Note that the engine still silently drops hop-by-hop headers and any header whose value contains
-  CR/LF; `serve()` does not refuse those, so they simply do not arrive.
+  (Those last two silent-drop cases are now refused as well — see the issue #107 entry above.)
 
   `InterceptRule['action']` is typed `{ serve: ServeStub }` (newly exported) instead of
   `{ serve: IsResponse }`, so the raw `addRule()` path catches the same mismatch at compile time.

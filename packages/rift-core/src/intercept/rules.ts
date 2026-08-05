@@ -54,8 +54,17 @@ function toStatusCode(statusCode: unknown): number {
   return code;
 }
 
+/** Mirrors the engine's `is_hop_by_hop` exactly (rift `crates/rift-http-proxy/src/intercept.rs`),
+ * which is deliberately narrower than RFC 7230's hop-by-hop set — `Keep-Alive`, `TE` and `Upgrade`
+ * are *not* in it and do reach the SUT. Widening this to the RFC set would refuse headers the engine
+ * serves happily, so it must track that function rather than the spec. */
+const ENGINE_MANAGED_HEADERS = new Set(['host', 'connection', 'content-length', 'transfer-encoding']);
+
 function toHeaders(headers: NonNullable<IsResponse['headers']>): Record<string, string> {
-  const out: Record<string, string> = {};
+  // Null-prototype: on a plain object `out[name] = value` for the single name `__proto__` hits the
+  // prototype setter instead of creating an own property, so that header would vanish here without
+  // an error — reachable whenever the caller's headers came from `JSON.parse`.
+  const out = Object.create(null) as Record<string, string>;
   for (const [name, value] of Object.entries(headers)) {
     if (Array.isArray(value)) {
       throw new InvalidDefinition(
@@ -64,6 +73,20 @@ function toHeaders(headers: NonNullable<IsResponse['headers']>): Record<string, 
     }
     if (typeof value !== 'string') {
       throw new InvalidDefinition(`intercept serve() header "${name}" must be a string, got ${typeof value}`);
+    }
+    // Both classes below are dropped engine-side — the managed names with no trace at all (a bare
+    // `continue`), CR/LF with a `tracing::warn!` the SDK caller never sees. Without these guards
+    // serve() succeeds and the header simply never arrives. forward() is no escape hatch:
+    // is_hop_by_hop is applied on the request-forward and response-relay legs too.
+    if (ENGINE_MANAGED_HEADERS.has(name.toLowerCase())) {
+      throw new InvalidDefinition(
+        `intercept serve() cannot send the header "${name}": the engine's intercept proxy manages connection framing itself (it always computes Content-Length and Connection: close) and silently drops this header. Remove it from the response.`
+      );
+    }
+    if (/[\r\n]/.test(name) || /[\r\n]/.test(value)) {
+      throw new InvalidDefinition(
+        `intercept serve() header "${name}" contains CR or LF, which the engine silently drops to prevent header/response splitting. Remove the control characters.`
+      );
     }
     out[name] = value;
   }

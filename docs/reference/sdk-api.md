@@ -626,6 +626,8 @@ Mountebank-shaped `IsResponse` the DSL builds — so `serve()` converts rather t
 | `_mode: 'binary'` or unrecognized | **throws `InvalidDefinition`** — the base64 would be served as literal text |
 | `statusCode` outside `100..999` | **throws `InvalidDefinition`** — the engine cannot render it as a status line |
 | `body` containing `NaN`/`Infinity`/`-Infinity` | **throws `InvalidDefinition`** locating the offending value — `JSON.stringify` would silently emit `null` |
+| `Host`, `Connection`, `Content-Length`, `Transfer-Encoding` (any case) | **throws `InvalidDefinition`** — the engine's proxy manages connection framing and drops these |
+| header name or value containing CR/LF | **throws `InvalidDefinition`** — the engine drops these to prevent response splitting |
 
 Use `forward()` to an imposter when you need a multi-value header, a binary body, or a status code
 outside `100..999`, or `addRule()` to send a rule verbatim. A non-finite number has no JSON form at
@@ -633,10 +635,13 @@ all, so no escape hatch applies there — send it as a string if the SUT expects
 follows your object; the imposter path re-serializes through Rust and emits sorted keys, so the two
 differ byte-wise (equivalent JSON) if a SUT hashes the body.
 
-The table covers what `serve()` itself refuses. Beyond it, the **engine** silently drops hop-by-hop
-headers (`Connection`, `Keep-Alive`, …) and any header whose value contains CR/LF, and it always
-computes `Content-Length`/`Connection` itself — so those never reach the SUT regardless of what you
-set here.
+The last two rows have no escape hatch: the engine strips those same four names on the `forward()`
+request and response legs as well, and a CR/LF-bearing header is unsendable in valid HTTP on any
+path. `addRule()` is not a way around them either — it bypasses this validation entirely, so the
+engine drops the header silently just as it did before. Note the four are exactly what the engine
+manages — `Keep-Alive`, `TE` and `Upgrade` are RFC 7230 hop-by-hop but are **not** stripped, so
+`serve()` sends them and the SUT receives them. The engine still appends its own `Content-Length`
+and `Connection: close` to every served response.
 
 Per-transport availability (documented, typed):
 - **embedded** — `engine.intercept(opts)` calls `rift_start_intercept` (idempotent handle reuse).
