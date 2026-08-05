@@ -11,7 +11,7 @@ import { EventEmitter } from 'events';
 import type { ChildProcess, spawn as spawnProcess } from 'child_process';
 import { jest } from '@jest/globals';
 import { create, waitForServer, type CreateDeps } from '../../src/compat/index.js';
-import { UnsupportedCreateOptionError } from '../../src/errors.js';
+import { InvalidDefinition, UnsupportedCreateOptionError } from '../../src/errors.js';
 
 describe('issue #25 — compat waitForServer (fetch-based poll)', () => {
   const realFetch = globalThis.fetch;
@@ -268,6 +268,81 @@ describe('issue #76 — create() fails loud on options it cannot honor (no silen
     try {
       await create({ port: 45720, datadir: '/tmp/ok' }, deps);
       expect(spawn).toHaveBeenCalledTimes(1);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+});
+
+describe('issue #108 — create() guards the ambient MB_APIKEY it hands the child', () => {
+  const saved = process.env.MB_APIKEY;
+
+  afterEach(() => {
+    if (saved === undefined) delete process.env.MB_APIKEY;
+    else process.env.MB_APIKEY = saved;
+  });
+
+  /** Fails the test if the binary is ever resolved or the process spawned. */
+  function spyDeps(): { deps: CreateDeps; spawn: jest.Mock; resolve: jest.Mock } {
+    const spawn = jest.fn(() => {
+      throw new Error('spawn must not be called — create() should reject before spawning');
+    });
+    const resolve = jest.fn(async () => '/fake/rift-binary');
+    return {
+      deps: {
+        spawn: spawn as unknown as typeof spawnProcess,
+        resolveEngineBinary: resolve as unknown as () => Promise<string>,
+      },
+      spawn,
+      resolve,
+    };
+  }
+
+  it.each([
+    ['empty', ''],
+    ['whitespace-only', '   '],
+  ])('rejects an inherited MB_APIKEY that is %s, before resolving a binary', async (_label, value) => {
+    process.env.MB_APIKEY = value;
+    const { deps, spawn, resolve } = spyDeps();
+
+    const err = await create({ port: 2525 }, deps).catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(InvalidDefinition);
+    expect((err as Error).message).toMatch(/MB_APIKEY environment variable/);
+    // The whole point of validating at entry: a caller mistake must not cost a binary download
+    // (resolveEngineBinary may fetch one) before it is reported.
+    expect(resolve).not.toHaveBeenCalled();
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['unset', undefined],
+    ['a real key', 'real-key'],
+  ])('leaves an MB_APIKEY that is %s alone and proceeds to spawn', async (_label, value) => {
+    if (value === undefined) delete process.env.MB_APIKEY;
+    else process.env.MB_APIKEY = value;
+
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = jest
+      .fn()
+      .mockResolvedValue({ status: 200 } as Response) as unknown as typeof fetch;
+    const child = Object.assign(new EventEmitter(), {
+      stdout: new EventEmitter(),
+      stderr: new EventEmitter(),
+      kill: jest.fn(() => true),
+    });
+    const spawn = jest.fn(() => child as unknown as ChildProcess);
+    const deps: CreateDeps = {
+      spawn: spawn as unknown as typeof spawnProcess,
+      resolveEngineBinary: async () => '/fake/rift-binary',
+    };
+
+    try {
+      await create({ port: 45721 }, deps);
+      expect(spawn).toHaveBeenCalledTimes(1);
+      // A real inherited key is legitimate engine config — create() must not strip it or refuse it,
+      // and it passes no `env`, so the child keeps inheriting it.
+      expect(spawn.mock.calls[0][2]).not.toHaveProperty('env');
     } finally {
       globalThis.fetch = realFetch;
     }

@@ -24,11 +24,12 @@ import { InvalidDefinition } from './errors.js';
  * on absurd inputs and both resolve safely — a key the engine would call blank is refused at its own
  * startup, and one this guard over-rejects simply has to be spelled without the stray code point.
  *
- * The engine's other door — an inherited `MB_APIKEY` environment variable — is guarded on the
- * `rift.spawn()` transport only, by `resolveApiKey()` in `spawn/spawn.ts`, which resolves the
- * effective key before calling this and passes the matching `source` (issue #103). The
- * Mountebank-compat `create()` transport spawns its own child and does not go through that path,
- * so a blank inherited value there still reaches the engine unguarded.
+ * The engine's other door — an inherited `MB_APIKEY` environment variable — is guarded by
+ * `resolveApiKey()` in `spawn/spawn.ts`, which resolves the effective key before calling this and
+ * passes the matching `source` (issue #103). Both transports that spawn a child now route through
+ * it: `rift.spawn()`, and the Mountebank-compat `create()`, which calls it with no option of its own
+ * so the check reduces to the ambient variable (issue #108). `rift.connect()` reaches a process it
+ * did not start and so has no inherited-env door to guard.
  */
 export type ApiKeySource = 'apiKey option' | 'MB_APIKEY environment variable';
 
