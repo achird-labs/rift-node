@@ -72,7 +72,10 @@ export class CommunicationError extends RiftError {
   }
 }
 
-/** The wire codec rejected input as malformed; `path` is a JSONPath-ish locator of the offending node. */
+/** The wire codec rejected input as malformed; `path` is a JSONPath-ish locator of the offending node
+ * (`$[2].action.serve.statusCode`). Diagnostic only — it is written for a human reading the failure,
+ * and is a different dialect from the `jsonpath` predicate parser in `verify/eval.ts`, which does not
+ * accept every key spelling this emits. Do not feed one to the other. */
 export class WireValidationError extends RiftError {
   readonly path: string;
 

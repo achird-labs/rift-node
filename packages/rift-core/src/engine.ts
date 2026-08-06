@@ -50,7 +50,7 @@ import { computeClosest, evalPredicates } from './verify/eval.js';
 import type { InterceptBackend, InterceptOptions } from './intercept/types.js';
 import { RemoteInterceptBackend } from './intercept/remote-backend.js';
 import { forwardRule, redirectRule, serveRule } from './intercept/rules.js';
-import { jsonSafeReplacer, stringifyJsonSafe } from './model/serialize.js';
+import { makeJsonSafeReplacer, stringifyJsonSafe } from './model/serialize.js';
 
 // --- shared small types ----------------------------------------------------------------------
 
@@ -646,7 +646,7 @@ class InterceptHandleImpl implements InterceptHandle {
     await this.addRule(redirectRule(imposter));
   }
 
-  /** Serialized through the wire model's own {@link jsonSafeReplacer} (issue #111) so a rule is
+  /** Serialized through the wire model's own {@link makeJsonSafeReplacer} (issue #111) so a rule is
    * refused here rather than arriving at the engine with a `null` the caller never wrote — a
    * non-finite `statusCode` or predicate value is otherwise nulled silently by `JSON.stringify`,
    * and the transport cannot catch it because `interceptAddRules` re-parses this string after the
@@ -657,7 +657,7 @@ class InterceptHandleImpl implements InterceptHandle {
     const rules = Array.isArray(rule) ? rule : [rule];
     let json: string;
     try {
-      json = JSON.stringify(rules, jsonSafeReplacer);
+      json = JSON.stringify(rules, makeJsonSafeReplacer());
     } catch (cause) {
       throw new InvalidDefinition(
         `intercept rule could not be serialized to JSON: ${cause instanceof Error ? cause.message : String(cause)}`,

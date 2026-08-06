@@ -20,7 +20,7 @@ import {
   type Imposter,
   type ImpostersConfig,
 } from '../../src/model/index.js';
-import { stringifyJsonSafe } from '../../src/model/serialize.js';
+import { makeJsonSafeReplacer, stringifyJsonSafe } from '../../src/model/serialize.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const fixturesDir = path.join(here, '..', 'fixtures', 'mb');
@@ -399,8 +399,8 @@ describe('wire model — serialization is JSON-safe (no silent loss)', () => {
       caught = e;
     }
     expect(caught).toBeInstanceOf(WireValidationError);
-    // JSON.stringify hands the replacer the array index as the key, so that is the locator.
-    expect((caught as WireValidationError).path).toBe('…1');
+    // The locator carries the whole route to the element, not just its index (issue #118).
+    expect((caught as WireValidationError).path).toBe('$.imposters[0]._rift.readings[1]');
   });
 
   it('throws on a root-level non-finite value with the root path (issue #106)', () => {
@@ -422,8 +422,7 @@ describe('wire model — serialization is JSON-safe (no silent loss)', () => {
       caught = e;
     }
     expect(caught).toBeInstanceOf(WireValidationError);
-    // JSON.stringify hands the replacer the array index as the key, so that is the locator.
-    expect((caught as WireValidationError).path).toBe('…1');
+    expect((caught as WireValidationError).path).toBe('$[1]');
     expect((caught as WireValidationError).message).toContain('undefined');
   });
 
@@ -478,6 +477,120 @@ describe('wire model — serialization is JSON-safe (no silent loss)', () => {
     expect(json).toContain('"negZero":0');
     expect(json).toContain(`"max":${Number.MAX_VALUE}`);
     expect(json).toContain('"n":42');
+  });
+});
+
+describe('wire model — error paths are full JSONPath locators (issue #118)', () => {
+  const pathOfThrow = (fn: () => unknown): string => {
+    let caught: unknown;
+    try {
+      fn();
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(WireValidationError);
+    return (caught as WireValidationError).path;
+  };
+
+  it('locates a bad value inside an array of rules by index and field', () => {
+    // The issue's motivating example: before this, the caller got `…statusCode` and had to bisect
+    // the array by hand to find which rule carried it.
+    const rules = [
+      { host: 'a.example.com', action: { serve: { statusCode: 200 } } },
+      { host: 'b.example.com', action: { serve: { statusCode: 200 } } },
+      { host: 'c.example.com', action: { serve: { statusCode: NaN } } },
+    ];
+    expect(pathOfThrow(() => stringifyJsonSafe(rules))).toBe('$[2].action.serve.statusCode');
+  });
+
+  it('locates a value in a nested array', () => {
+    expect(pathOfThrow(() => stringifyJsonSafe([[1, Infinity]]))).toBe('$[0][1]');
+    expect(pathOfThrow(() => stringifyJsonSafe({ a: { b: [{ c: [1, 2, NaN] }] } }))).toBe('$.a.b[0].c[2]');
+  });
+
+  it('locates an undefined array element with a full path (issue #119 locator upgrade)', () => {
+    expect(pathOfThrow(() => stringifyJsonSafe([1, undefined, 3]))).toBe('$[1]');
+    expect(pathOfThrow(() => stringifyJsonSafe({ rules: [{ ok: true }, undefined] }))).toBe('$.rules[1]');
+  });
+
+  it('quotes a key that is not a bare identifier', () => {
+    expect(pathOfThrow(() => stringifyJsonSafe({ 'weird key': NaN }))).toBe('$["weird key"]');
+    // Header names are the realistic case in this codebase's payloads — a hyphen is not an identifier.
+    expect(pathOfThrow(() => stringifyJsonSafe({ headers: { 'Content-Type': NaN } }))).toBe(
+      '$.headers["Content-Type"]'
+    );
+    expect(pathOfThrow(() => stringifyJsonSafe({ '': NaN }))).toBe('$[""]');
+    // A numeric-looking key on an OBJECT must stay distinguishable from an array index.
+    expect(pathOfThrow(() => stringifyJsonSafe({ '0': NaN }))).toBe('$["0"]');
+    expect(pathOfThrow(() => stringifyJsonSafe([{ '0': NaN }]))).toBe('$[0]["0"]');
+    // Delegating to JSON.stringify means quotes, backslashes, newlines and unicode all escape.
+    expect(pathOfThrow(() => stringifyJsonSafe({ 'a"b': NaN }))).toBe('$["a\\"b"]');
+    expect(pathOfThrow(() => stringifyJsonSafe({ 'a\\b': NaN }))).toBe('$["a\\\\b"]');
+    expect(pathOfThrow(() => stringifyJsonSafe({ 'a\nb': NaN }))).toBe('$["a\\nb"]');
+    expect(pathOfThrow(() => stringifyJsonSafe({ café: NaN }))).toBe('$["café"]');
+    // A key that merely looks like a path fragment must not be spliced in unquoted.
+    expect(pathOfThrow(() => stringifyJsonSafe({ 'a.b': NaN }))).toBe('$["a.b"]');
+    expect(pathOfThrow(() => stringifyJsonSafe({ 'a[0]': NaN }))).toBe('$["a[0]"]');
+  });
+
+  it('is single-use — a replacer must not be hoisted across serializations', () => {
+    // The root latch is consumed on first call, so reuse would report the second document's
+    // root-level error against the first document's ancestry. Pinned because the export is shared.
+    const replacer = makeJsonSafeReplacer();
+    expect(() => JSON.stringify({ a: 1 }, replacer)).not.toThrow();
+    let caught: unknown;
+    try {
+      JSON.stringify(NaN, replacer);
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(WireValidationError);
+    expect((caught as WireValidationError).path).not.toBe('$');
+  });
+
+  it('keeps the root path for a bad value at the root', () => {
+    expect(pathOfThrow(() => stringifyJsonSafe(NaN))).toBe('$');
+    expect(pathOfThrow(() => stringifyJsonSafe(BigInt(1)))).toBe('$');
+  });
+
+  it('describes a shared object by the occurrence being serialized', () => {
+    // JSON.stringify is depth-first, so a shared node's subtree at $.a.x completes before $.b.y
+    // begins. The recorded path is therefore always the occurrence currently being walked, not a
+    // stale first sighting.
+    const shared = { deep: NaN };
+    expect(pathOfThrow(() => stringifyJsonSafe({ b: { y: shared } }))).toBe('$.b.y.deep');
+    const ok = { fine: 1 };
+    expect(pathOfThrow(() => stringifyJsonSafe({ a: { x: ok }, b: { y: ok }, c: [ok, { bad: NaN }] }))).toBe(
+      '$.c[1].bad'
+    );
+  });
+
+  it('keeps paths separate when toJSON re-enters the serializer', () => {
+    // Per-call state, not module state: a reentrant serialization must not corrupt the outer walk's
+    // path table, and its own error must carry its own path.
+    let innerPath = '';
+    const reentrant = {
+      toJSON(): unknown {
+        innerPath = pathOfThrow(() => stringifyJsonSafe({ inner: [NaN] }));
+        return { ok: true };
+      },
+    };
+    expect(stringifyJsonSafe({ outer: { nested: reentrant } })).toBe('{"outer":{"nested":{"ok":true}}}');
+    expect(innerPath).toBe('$.inner[0]');
+    // And the outer walk still reports its own paths correctly afterwards.
+    expect(pathOfThrow(() => stringifyJsonSafe({ outer: { nested: reentrant, bad: NaN } }))).toBe(
+      '$.outer.bad'
+    );
+  });
+
+  it('still throws on every input it threw on before — only the locator text changed', () => {
+    expect(() => stringifyJsonSafe({ a: [{ b: () => 1 }] })).toThrow(WireValidationError);
+    expect(() => stringifyJsonSafe({ a: [Symbol('x')] })).toThrow(WireValidationError);
+    expect(() => stringifyJsonSafe({ a: [BigInt(1)] })).toThrow(WireValidationError);
+    expect(() => stringifyJsonSafe({ a: [Infinity] })).toThrow(WireValidationError);
+    expect(() => stringifyJsonSafe({ a: [undefined] })).toThrow(WireValidationError);
+    // Still a faithful projection for everything legal.
+    expect(stringifyJsonSafe({ a: [1, 'x', null, { b: true }] })).toBe('{"a":[1,"x",null,{"b":true}]}');
   });
 });
 
@@ -561,7 +674,7 @@ describe('wire model — a wrapped serialization failure keeps the original erro
     expect(caught).toBeInstanceOf(WireValidationError);
     // Re-wrapping would flatten the precise key locator to the root and bury the real message one
     // level down, so the replacer's own error must pass straight through — with no cause bolted on.
-    expect((caught as WireValidationError).path).toBe('…n');
+    expect((caught as WireValidationError).path).toBe('$.n');
     expect((caught as WireValidationError).message).toContain('bigint');
     expect((caught as WireValidationError).message).not.toContain('value is not JSON-serializable');
     expect((caught as WireValidationError).cause).toBeUndefined();
