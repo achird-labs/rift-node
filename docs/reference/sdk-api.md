@@ -264,7 +264,9 @@ All SDK-thrown errors are `RiftError` subclasses (the compat `create()` keeps it
 `WireValidationError` guards both directions. Inbound it reports a malformed shape from `fromJson`;
 outbound (issue #112) every admin payload — imposters, stubs, flow-state values, `intercept()`
 options — is refused before it is sent if JSON cannot represent it honestly: a non-finite number
-(`JSON.stringify` would emit `null`), a `bigint`, a function or a symbol. `.path` names the offending
+(`JSON.stringify` would emit `null`), a `bigint`, a function, a symbol, or an `undefined` array
+*element* (nulled the same way — issue #119). An `undefined` object *property* is not an error: it is
+dropped, which is how an omitted optional stays off the wire. `.path` names the offending
 key. The request is never sent, so a refusal leaves no partial state on the engine. Intercept *rules*
 are the one exception to the type: `serve()`/`forward()`/`addRule()` report the same failure as
 `InvalidDefinition`, because issue #101 fixed that surface to a single error type.

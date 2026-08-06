@@ -360,6 +360,17 @@ describe('issue #101 — serve() normalizes the response into the engine ServeSt
     await serveRejects({ body: [1, (() => 1) as never] });
     await serveRejects({ body: { s: Symbol('x') as never } });
   });
+
+  it('rejects an undefined element in a body array rather than serving it as null (issue #119)', async () => {
+    // toBody() is a second, independent caller of the shared replacer, so pin the guard here too:
+    // a future refactor that pre-processed the body before serializing would restore the silent
+    // null on this path alone and the addRule() test would still pass.
+    await serveRejects({ body: [1, undefined as never] });
+    // A body OBJECT property stays droppable — that is the omitted-optional contract, not the bug.
+    expect(await serveWire({ body: { a: 1, b: undefined as never } })).toMatchObject({
+      body: JSON.stringify({ a: 1 }),
+    });
+  });
 });
 
 describe('issue #111 — addRule() refuses values JSON cannot represent', () => {
@@ -405,6 +416,22 @@ describe('issue #111 — addRule() refuses values JSON cannot represent', () => 
     await addRuleRejects({ host: 'x.example.com', action: { serve: { statusCode: NaN } } });
     await addRuleRejects({ host: 'x.example.com', action: { serve: { statusCode: Infinity } } });
     await addRuleRejects({ host: 'x.example.com', action: { serve: { statusCode: -Infinity } } });
+  });
+
+  it('rejects an undefined element in a rule array instead of sending it as null (issue #119)', async () => {
+    // The issue's motivating shape: an untyped or JSON.parse-derived caller hands addRule() an
+    // array with a hole. JSON.stringify nulls an undefined ELEMENT (unlike a property, which it
+    // drops), so before this guard the engine received a rule the caller never wrote.
+    const valid = { host: 'x.example.com', action: { serve: { statusCode: 200 } } };
+    await addRuleRejects([valid, undefined] as unknown as InterceptRule[]);
+
+    // The wrapping keeps the replacer's own error reachable (issue #121), so a caller can tell
+    // this apart from any other InvalidDefinition without parsing the message.
+    const fake = new FakeInterceptBackend();
+    const { engine } = engineOf(fake);
+    const handle = await engine.intercept();
+    const caught = await handle.addRule([valid, undefined] as unknown as InterceptRule[]).catch((e: unknown) => e);
+    expect((caught as InvalidDefinition).cause).toBeInstanceOf(WireValidationError);
   });
 
   it('rejects a non-finite value nested inside and/or/not predicate combinators', async () => {

@@ -5,9 +5,11 @@
  * toWireString} is its typed, wire-model-shaped face.
  *
  * Because the model already carries wire keys, serialization is a faithful, transformation-free
- * projection: it drops `undefined` optional fields (so omitted options never reach the wire) and
- * yields a JSON-safe object. A model produced by {@link fromJson} therefore round-trips to a
- * value-identical object — including an explicit `port`.
+ * projection: it drops `undefined` optional *properties* (so omitted options never reach the wire)
+ * and yields a JSON-safe object. A model produced by {@link fromJson} therefore round-trips to a
+ * value-identical object — including an explicit `port`. An undefined ARRAY ELEMENT is the one
+ * exception and throws: `JSON.stringify` nulls it rather than dropping it, so it is a value the
+ * caller never wrote (issue #119).
  *
  * The model must be JSON-safe. A value JSON cannot represent — a function, `bigint`, `symbol`,
  * non-finite number or circular reference — is a caller error, so it throws a typed
@@ -37,6 +39,19 @@ export function jsonSafeReplacer(this: unknown, key: string, value: unknown): un
   if (t === 'number' && !Number.isFinite(value)) {
     throw new WireValidationError(
       `non-finite number ${String(value)} is not JSON-serializable (JSON.stringify would silently emit null)`,
+      pathOf(key)
+    );
+  }
+  // The same silent-null shape one level up: `JSON.stringify` renders an undefined ARRAY ELEMENT as
+  // null, where an undefined object PROPERTY is dropped — and that drop is the contract this module
+  // documents for omitted optionals, so the two must not be treated alike. A replacer is called with
+  // the holder of the current key as `this`, which separates them exactly. The root value's holder is
+  // the internal `{'': value}` wrapper rather than an array, so a top-level `undefined` still falls
+  // through to the whole-value check in `stringifyJsonSafe`. Sparse holes and an element whose
+  // `toJSON()` returned undefined arrive here as undefined too, and are the same bug.
+  if (value === undefined && Array.isArray(this)) {
+    throw new WireValidationError(
+      'undefined array element is not JSON-serializable (JSON.stringify would silently emit null)',
       pathOf(key)
     );
   }

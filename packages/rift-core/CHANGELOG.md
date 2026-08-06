@@ -7,6 +7,26 @@ All notable changes to `@rift-vs/rift` are documented here. This project adheres
 
 ### Fixed
 
+- **An `undefined` array element is refused instead of reaching the engine as `null`** (issue #119).
+  `JSON.stringify` treats the two `undefined` positions differently: an object *property* is dropped,
+  but an array *element* is rendered as `null`. `jsonSafeReplacer` checked neither, so
+  `addRule([rule, undefined])` — or any array-valued field with a hole, reachable from an untyped or
+  `JSON.parse`-derived caller — put a value on the wire that the caller never wrote, with nothing
+  SDK-side to correlate against. The same wrong-but-quiet class already fixed for non-finite numbers
+  in issues #106/#110/#111.
+
+  An undefined array element now throws `WireValidationError`. A replacer receives the holder of the
+  current key as `this`, which separates the two cases exactly: undefined *properties* are still
+  dropped (the omitted-optional contract is unchanged), and a top-level `undefined` still reports
+  `value has no JSON representation`, since its holder is `JSON.stringify`'s internal wrapper rather
+  than an array. Sparse holes and an element whose `toJSON()` returned `undefined` are the same bug
+  and are caught too.
+
+  Because the guard lives in the shared replacer, it applies at every serializing call site:
+  `toWireString()`/`toWireJson()`, `intercept.serve()`'s body, `addRule()`, and every payload routed
+  through `stringifyJsonSafe` — including `flowState.put()`, where a caller-supplied
+  `[1, undefined]` now throws rather than being stored as `[1, null]`.
+
 - **A wrapped serialization failure keeps the original error as `cause`** (issue #121).
   `stringifyJsonSafe()` is the choke point every outbound admin payload serializes through, and when
   `JSON.stringify` threw something the SDK had not raised itself — a bare `TypeError` from a circular
