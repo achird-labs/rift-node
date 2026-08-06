@@ -414,6 +414,61 @@ describe('wire model — serialization is JSON-safe (no silent loss)', () => {
     expect((caught as WireValidationError).path).toBe('$');
   });
 
+  it('refuses an undefined array element (issue #119)', () => {
+    let caught: unknown;
+    try {
+      stringifyJsonSafe([1, undefined, 3]);
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(WireValidationError);
+    // JSON.stringify hands the replacer the array index as the key, so that is the locator.
+    expect((caught as WireValidationError).path).toBe('…1');
+    expect((caught as WireValidationError).message).toContain('undefined');
+  });
+
+  it('refuses a sparse array hole (issue #119)', () => {
+    // eslint-disable-next-line no-sparse-arrays
+    const sparse = [1, , 3];
+    expect(() => stringifyJsonSafe(sparse)).toThrow(WireValidationError);
+  });
+
+  it('still drops an undefined object property (issue #119)', () => {
+    // The documented contract: an omitted optional wire field must not reach the engine, and is
+    // NOT the silent-null bug — JSON.stringify drops it rather than nulling it.
+    expect(stringifyJsonSafe({ a: undefined })).toBe('{}');
+    expect(stringifyJsonSafe({ a: 1, b: undefined })).toBe('{"a":1}');
+  });
+
+  it('refuses an array element whose toJSON() returns undefined (issue #119)', () => {
+    // toJSON() runs before the replacer, so this reaches the wire as null exactly like a literal
+    // undefined element would.
+    const vanishing = { toJSON: () => undefined };
+    expect(() => stringifyJsonSafe([1, vanishing])).toThrow(WireValidationError);
+  });
+
+  it('refuses an undefined element nested inside a model (issue #119)', () => {
+    const model = {
+      imposters: [{ protocol: 'http', _rift: { readings: [1, undefined] } }],
+    } as unknown as ImpostersConfig;
+    expect(() => toWireString(model)).toThrow(WireValidationError);
+    expect(() => toWireJson(model)).toThrow(WireValidationError);
+  });
+
+  it('still reports a root-level undefined as having no JSON representation (issue #119)', () => {
+    // The root holder is JSON.stringify's internal {'': value} wrapper, not an array, so this must
+    // keep falling through to the existing whole-value check rather than the new array-element one.
+    let caught: unknown;
+    try {
+      stringifyJsonSafe(undefined);
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(WireValidationError);
+    expect((caught as WireValidationError).path).toBe('$');
+    expect((caught as WireValidationError).message).toContain('no JSON representation');
+  });
+
   it('leaves finite numbers untouched — including 0, -0 and MAX_VALUE (issue #106)', () => {
     const model = {
       imposters: [{ protocol: 'http', _rift: { zero: 0, negZero: -0, max: Number.MAX_VALUE, n: 42 } }],
