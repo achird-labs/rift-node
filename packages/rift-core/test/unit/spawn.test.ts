@@ -29,8 +29,12 @@ import {
   spawn,
   type SpawnDeps,
 } from '../../src/spawn/index.js';
-import { InvalidDefinition } from '../../src/errors.js';
+import { EngineVersionError, InvalidDefinition } from '../../src/errors.js';
 import { assertInterceptAuthValid } from '../../src/apikey.js';
+
+/** U+0085 (NEL): whitespace to Rust's `str::trim`, not to JavaScript's. Written as an escape
+ * because the literal character is invisible in an editor and survives copy-paste poorly. */
+const NEL = '\u0085';
 
 const DEFAULT_BASE = 'https://github.com/achird-labs/rift/releases/download';
 
@@ -791,5 +795,230 @@ describe('spawn — RIFT_INTERCEPT_AUTH env contract (issue #115)', () => {
       expect(err).toBeInstanceOf(InvalidDefinition);
       expect(resolveBinary).not.toHaveBeenCalled();
     });
+  });
+});
+
+// Issue #124. Before this, an ambient RIFT_INTERCEPT_AUTH was the ONLY way to give a spawned engine
+// an intercept credential, so two engines in one process could not differ and tests had to mutate
+// process.env. `InterceptOptions.auth` is the per-spawn option, carried on the CHILD's environment
+// rather than argv.
+describe('spawn — intercept auth option (issue #124)', () => {
+  let saved: string | undefined;
+
+  beforeEach(() => {
+    saved = process.env.RIFT_INTERCEPT_AUTH;
+    delete process.env.RIFT_INTERCEPT_AUTH;
+  });
+
+  afterEach(() => {
+    if (saved === undefined) delete process.env.RIFT_INTERCEPT_AUTH;
+    else process.env.RIFT_INTERCEPT_AUTH = saved;
+  });
+
+  function fakeChild(): ChildProcess {
+    const child = new EventEmitter() as unknown as ChildProcess;
+    return Object.assign(child, { stderr: null, stdout: null, exitCode: 0, signalCode: null, kill: () => true });
+  }
+
+  /** Admin plane reporting a chosen engine version from GET /config, so the version gate below has
+   * something real to read. */
+  async function stubAdmin(version: string | undefined): Promise<{ port: number; close: () => Promise<void> }> {
+    const server = http.createServer((req, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      if (req.url?.startsWith('/config')) {
+        res.end(JSON.stringify({ options: version === undefined ? {} : { version } }));
+        return;
+      }
+      res.end(JSON.stringify({ imposters: [] }));
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const { port } = server.address() as AddressInfo;
+    return { port, close: () => new Promise<void>((resolve) => server.close(() => resolve())) };
+  }
+
+  /** Captures both argv and the env handed to the child, which is where the credential belongs. */
+  async function spawnCapturing(
+    admin: { port: number },
+    opts: Parameters<typeof spawn>[0] = {},
+    engineVersion: string | undefined = '0.17.0'
+  ): Promise<{
+    engine: Awaited<ReturnType<typeof spawn>>;
+    args: string[];
+    env?: Record<string, string | undefined>;
+    spawned: () => boolean;
+  }> {
+    let args: string[] = [];
+    let env: Record<string, string | undefined> | undefined;
+    let launched = false;
+    const engine = await spawn(
+      { ...opts, port: admin.port, binaryPath: process.execPath },
+      {
+        resolveBinary: async () => process.execPath,
+        probeVersion: () => engineVersion,
+        spawn: ((_bin: string, spawnArgs: string[], spawnOpts?: { env?: Record<string, string | undefined> }) => {
+          launched = true;
+          args = spawnArgs;
+          env = spawnOpts?.env;
+          return fakeChild();
+        }) as unknown as SpawnDeps['spawn'],
+      }
+    );
+    return { engine, args, env, spawned: () => launched };
+  }
+
+  /** Captures whether a child was ever launched, for the gate tests that must prove it wasn't. */
+  function launchTracking(engineVersion: string | undefined): { deps: SpawnDeps; spawned: () => boolean } {
+    let launched = false;
+    return {
+      spawned: () => launched,
+      deps: {
+        resolveBinary: (async () => process.execPath) as unknown as SpawnDeps['resolveBinary'],
+        probeVersion: () => engineVersion,
+        spawn: (() => {
+          launched = true;
+          return fakeChild();
+        }) as unknown as SpawnDeps['spawn'],
+      },
+    };
+  }
+
+  /** Neither door may resolve a binary or launch anything for a credential that cannot work. */
+  function refusingDeps(): SpawnDeps {
+    return {
+      resolveBinary: (async () => {
+        throw new Error('must not resolve a binary for an invalid credential');
+      }) as unknown as SpawnDeps['resolveBinary'],
+      spawn: (() => {
+        throw new Error('must not spawn');
+      }) as unknown as SpawnDeps['spawn'],
+    };
+  }
+
+  const CRED = { username: 'proxyuser', password: 'proxypass' };
+
+  it('puts the credential on the child environment and never on argv', async () => {
+    const admin = await stubAdmin('0.17.0');
+    try {
+      const { engine, args, env } = await spawnCapturing(admin, { intercept: { auth: CRED } });
+      await engine.close();
+      expect(env?.RIFT_INTERCEPT_AUTH).toBe('proxyuser:proxypass');
+      // argv is world-readable via /proc/<pid>/cmdline and captured by ps/auditd.
+      expect(args.join(' ')).not.toContain('proxypass');
+      expect(args).not.toContain('--intercept-auth');
+      expect(args).toContain('--intercept-port');
+      // This process's own environment is never touched — that isolation is what the option buys.
+      expect(process.env.RIFT_INTERCEPT_AUTH).toBeUndefined();
+    } finally {
+      await admin.close();
+    }
+  });
+
+  it('lets the option win over an ambient value, including a malformed one', async () => {
+    // An ambient value that would be refused on its own must not fail a spawn that overrides it:
+    // the child never sees it.
+    process.env.RIFT_INTERCEPT_AUTH = 'no-colon-here';
+    const admin = await stubAdmin('0.17.0');
+    try {
+      const { engine, env } = await spawnCapturing(admin, { intercept: { auth: CRED } });
+      await engine.close();
+      expect(env?.RIFT_INTERCEPT_AUTH).toBe('proxyuser:proxypass');
+    } finally {
+      await admin.close();
+    }
+  });
+
+  it('refuses a blank half, in either trim dialect', async () => {
+    const bad = [
+      { username: '', password: 'p' },
+      { username: 'u', password: '   ' },
+      // U+0085 is whitespace to Rust's str::trim but not to JavaScript's (issue #116).
+      { username: NEL, password: 'p' },
+      { username: 'u', password: NEL + NEL },
+    ];
+    for (const auth of bad) {
+      const err = await spawn({ intercept: { auth } }, refusingDeps()).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(InvalidDefinition);
+    }
+  });
+
+  it('refuses a username containing a colon at the spawn door', async () => {
+    // The env form is colon-joined and the engine splits on the FIRST colon, so `a:b` as a username
+    // would silently authenticate as `a` with the password `b:<rest>`.
+    const err = await spawn(
+      { intercept: { auth: { username: 'has:colon', password: 'p' } } },
+      refusingDeps()
+    ).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(InvalidDefinition);
+    expect((err as Error).message).toMatch(/colon/i);
+  });
+
+  it('refuses to hand a credential to an engine too old to enforce it, without ever starting it', async () => {
+    // Below v0.17.0 the engine has no --intercept-auth flag, so clap never reads the variable: the
+    // listener would come up UNAUTHENTICATED while the caller believes it is guarded.
+    //
+    // The engine binds its intercept listener BEFORE its admin plane, so a gate that waited to ask
+    // the running engine would already have exposed an open MITM proxy. Asserting the child was
+    // never launched is therefore the real requirement — "it threw" alone would also be true of a
+    // gate that let the proxy come up first and killed it afterwards.
+    const { deps, spawned } = launchTracking('0.16.9');
+    const err = await spawn({ intercept: { auth: CRED } }, deps).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(EngineVersionError);
+    expect((err as Error).message).toMatch(/intercept/i);
+    expect(spawned()).toBe(false);
+  });
+
+  it('fails closed when the engine version cannot be determined', async () => {
+    // A gate that cannot confirm the credential will be enforced must not assume that it will.
+    for (const version of [undefined, 'not-a-version']) {
+      const { deps, spawned } = launchTracking(version);
+      const err = await spawn({ intercept: { auth: CRED } }, deps).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(EngineVersionError);
+      expect(spawned()).toBe(false);
+    }
+  });
+
+  it('does not version-gate a spawn that asked for no credential', async () => {
+    // The gate is about the credential, so an ordinary intercept spawn on an old engine is
+    // untouched — and pays nothing for the feature, which the probe count pins rather than asserts
+    // by comment.
+    const admin = await stubAdmin('0.16.0');
+    let probes = 0;
+    try {
+      const engine = await spawn(
+        { intercept: true, port: admin.port, binaryPath: process.execPath },
+        {
+          resolveBinary: async () => process.execPath,
+          probeVersion: () => {
+            probes++;
+            return '0.16.0';
+          },
+          spawn: (() => fakeChild()) as unknown as SpawnDeps['spawn'],
+        }
+      );
+      expect(probes).toBe(0);
+      await engine.close();
+    } finally {
+      await admin.close();
+    }
+  });
+
+  it('leaves the ambient-only path exactly as issue #115 left it', async () => {
+    process.env.RIFT_INTERCEPT_AUTH = 'ambient:secret';
+    const admin = await stubAdmin('0.17.0');
+    try {
+      const { engine, env } = await spawnCapturing(admin, { intercept: true });
+      await engine.close();
+      // Not overridden, and not copied onto argv either — the child simply inherits it.
+      expect(env?.RIFT_INTERCEPT_AUTH ?? process.env.RIFT_INTERCEPT_AUTH).toBe('ambient:secret');
+    } finally {
+      await admin.close();
+    }
+  });
+
+  it('keeps auth out of buildSpawnArgs entirely', () => {
+    // Typed as Omit<InterceptOptions, 'auth'> so a silently-dropped credential is unrepresentable
+    // rather than merely undocumented; this pins the runtime half of that.
+    const args = buildSpawnArgs(2525, { intercept: { port: 9000 } });
+    expect(args.join(' ')).not.toContain('auth');
   });
 });

@@ -7,12 +7,18 @@
  * instead of the legacy axios-based `RiftServerImpl`.
  */
 
-import { type ChildProcess, spawn as spawnProcess } from 'child_process';
+import { type ChildProcess, execFileSync, spawn as spawnProcess } from 'child_process';
 import net from 'net';
 import { RemoteClient } from '../remote/index.js';
-import { InvalidDefinition } from '../errors.js';
-import { assertApiKeyNotBlank, assertInterceptAuthValid } from '../apikey.js';
+import { EngineVersionError, InvalidDefinition } from '../errors.js';
+import {
+  assertApiKeyNotBlank,
+  assertInterceptAuthOption,
+  assertInterceptAuthValid,
+  MIN_INTERCEPT_AUTH_ENGINE,
+} from '../apikey.js';
 import type { InterceptOptions } from '../intercept/types.js';
+import { isAtLeastVersion } from '../version.js';
 import { resolveBinary, type EnvRecord } from './resolve.js';
 
 // Must be an IP literal: the engine parses `--host` into a socket address, so a hostname
@@ -35,7 +41,10 @@ export interface SpawnArgsOptions {
   configfile?: string;
   defaultTls?: { cert: string; key: string };
   metricsPort?: number;
-  intercept?: boolean | InterceptOptions;
+  /** `auth` is deliberately absent: the credential travels on the child's ENVIRONMENT, never argv
+   * (see `spawn()`), so a `buildSpawnArgs` that silently dropped it would be an
+   * open-proxy-believed-guarded hazard. Making it unrepresentable beats documenting it. */
+  intercept?: boolean | Omit<InterceptOptions, 'auth'>;
 }
 
 /** Builds the Rift engine CLI args for a given admin port. */
@@ -124,9 +133,33 @@ export function resolveApiKey(apiKey: string | undefined, env: EnvRecord = proce
 export interface SpawnDeps {
   spawn: typeof spawnProcess;
   resolveBinary: typeof resolveBinary;
+  /** Reads a resolved binary's own version, for the intercept-auth gate below. Injectable so that
+   * gate is testable without a real engine binary, in the unit lane CI actually runs. Optional so a
+   * caller injecting only the other two keeps working; it defaults to {@link probeBinaryVersion}. */
+  probeVersion?: (binaryPath: string) => string | undefined;
 }
 
-const defaultSpawnDeps: SpawnDeps = { spawn: spawnProcess, resolveBinary };
+/**
+ * `<binary> --version` prints `rift <version>`; the version is whatever semver-looking token follows.
+ *
+ * Returns `undefined` on any failure — not executable, no such file, a timeout, unrecognizable
+ * output. Every caller treats that as "cannot confirm" and refuses, so a probe that cannot answer
+ * never reads as a yes.
+ */
+export function probeBinaryVersion(binaryPath: string): string | undefined {
+  try {
+    const out = execFileSync(binaryPath, ['--version'], {
+      encoding: 'utf8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+      timeout: 5000,
+    });
+    return /(\d+\.\d+\.\d+[^\s]*)/.exec(out)?.[1];
+  } catch {
+    return undefined;
+  }
+}
+
+const defaultSpawnDeps: SpawnDeps = { spawn: spawnProcess, resolveBinary, probeVersion: probeBinaryVersion };
 
 export interface SpawnOptions {
   /** Admin port to bind. Defaults to an OS-assigned ephemeral port. */
@@ -274,18 +307,26 @@ export async function spawn(opts: SpawnOptions = {}, deps: SpawnDeps = defaultSp
   // Ahead of resolveBinary: a blank key is a caller mistake, so it should not cost a binary
   // download to discover, and the engine would only report it as an opaque child-process exit.
   const apiKey = resolveApiKey(opts.apiKey);
+  const interceptEnabled = opts.intercept === true || (typeof opts.intercept === 'object' && opts.intercept !== null);
+  const interceptAuth = typeof opts.intercept === 'object' && opts.intercept !== null ? opts.intercept.auth : undefined;
+  // Validate the option before anything is resolved, like the admin key: a credential that cannot
+  // work is a caller mistake and should not cost a binary download to discover.
+  assertInterceptAuthOption(interceptAuth, true);
   // Same door, same reasoning (issue #115): the child inherits RIFT_INTERCEPT_AUTH too, and the
   // engine refuses to start on a malformed one, a blank-halved one, or a valid one with no listener
   // to guard. `false` is "no listener" exactly as an absent option is.
+  //
+  // Skipped entirely when `auth` was passed: the option overwrites this variable on the child's
+  // environment, so the ambient value is inert and refusing a spawn over it would be a false
+  // positive (issue #124).
   //
   // Read once, unlike MB_APIKEY below: that one is re-checked after resolution because a value that
   // goes blank mid-download leaves the engine and the admin client disagreeing, silently. This one
   // has no such pair — the engine fails closed on it by itself, so a mid-download change costs the
   // opaque child exit this guard usually prevents rather than a wrong-but-quiet success.
-  assertInterceptAuthValid(
-    process.env.RIFT_INTERCEPT_AUTH,
-    opts.intercept === true || (typeof opts.intercept === 'object' && opts.intercept !== null)
-  );
+  if (interceptAuth === undefined) {
+    assertInterceptAuthValid(process.env.RIFT_INTERCEPT_AUTH, interceptEnabled);
+  }
 
   const binaryPath = await deps.resolveBinary({
     version: opts.version,
@@ -293,6 +334,34 @@ export async function spawn(opts: SpawnOptions = {}, deps: SpawnDeps = defaultSp
     env: opts.env,
     mirror: opts.mirror,
   });
+
+  // A credential the engine is too old to enforce is worse than no credential: below v0.17.0 the
+  // `--intercept-auth` flag does not exist, so clap never reads RIFT_INTERCEPT_AUTH and the listener
+  // accepts everything while the caller believes it is guarded. The engine cannot report this — from
+  // its side nothing happened.
+  //
+  // Probed from the BINARY, before the child is started, deliberately. Asking the running engine's
+  // /config instead would be simpler, but the engine binds the intercept listener BEFORE its admin
+  // plane, so by the time /config could answer, an unauthenticated MITM proxy has already been
+  // accepting connections — a gate that can only shorten the exposure, not prevent it. Probing first
+  // means no listener is ever started on an engine that cannot guard it.
+  //
+  // Only runs when `auth` was passed, so an ordinary spawn pays nothing.
+  if (interceptAuth !== undefined) {
+    const version = (deps.probeVersion ?? probeBinaryVersion)(binaryPath);
+    // Unknown or unparseable counts as too old: a gate that cannot confirm the credential will be
+    // enforced must not assume that it will.
+    if (!isAtLeastVersion(version, MIN_INTERCEPT_AUTH_ENGINE)) {
+      throw new EngineVersionError(
+        version ?? 'unknown',
+        MIN_INTERCEPT_AUTH_ENGINE,
+        `intercept auth needs engine >= ${MIN_INTERCEPT_AUTH_ENGINE} (${binaryPath} reports ` +
+          `${version ?? 'no recognizable version'}): older engines do not read RIFT_INTERCEPT_AUTH at ` +
+          `all, so the listener would accept every request while appearing to be guarded. Pin a newer ` +
+          `engine, or drop intercept.auth to start the listener explicitly unauthenticated.`
+      );
+    }
+  }
 
   const port = opts.port ?? (await findFreePort());
   const interceptPort = await resolveInterceptPort(opts.intercept);
@@ -334,9 +403,20 @@ export async function spawn(opts: SpawnOptions = {}, deps: SpawnDeps = defaultSp
     );
   }
 
+  // The intercept credential rides the child's ENVIRONMENT, not argv. Two reasons: argv is the
+  // strictly more exposed channel (the same `/proc/<pid>/cmdline` reasoning as above), and unlike
+  // `apiKey` this option has no historical command-line contract to preserve — so it takes the safer
+  // door from the start. Overriding the inherited value here is also what makes the option beat an
+  // ambient `RIFT_INTERCEPT_AUTH` without depending on clap's flag-over-env precedence.
+  const childEnv =
+    interceptAuth === undefined
+      ? undefined
+      : { ...process.env, RIFT_INTERCEPT_AUTH: `${interceptAuth.username}:${interceptAuth.password}` };
+
   const proc = deps.spawn(binaryPath, args, {
     stdio: ['ignore', 'pipe', 'pipe'],
     detached: false,
+    ...(childEnv === undefined ? {} : { env: childEnv }),
   });
 
   let stderr = '';
@@ -372,13 +452,15 @@ export async function spawn(opts: SpawnOptions = {}, deps: SpawnDeps = defaultSp
     });
   };
 
+  // The same resolved key the engine is running with — whether it arrived by option or by
+  // inherited MB_APIKEY. Building this client without it was issue #103's second failure mode.
+  const client = new RemoteClient(url, apiKey === undefined ? {} : { apiKey });
+
   return {
     url,
     port,
     ...(interceptPort !== undefined ? { interceptPort } : {}),
-    // The same resolved key the engine is running with — whether it arrived by option or by
-    // inherited MB_APIKEY. Building this client without it was issue #103's second failure mode.
-    client: new RemoteClient(url, apiKey === undefined ? {} : { apiKey }),
+    client,
     close,
     async [Symbol.asyncDispose](): Promise<void> {
       await close();

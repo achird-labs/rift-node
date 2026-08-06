@@ -51,6 +51,8 @@ import type { InterceptBackend, InterceptOptions } from './intercept/types.js';
 import { RemoteInterceptBackend } from './intercept/remote-backend.js';
 import { forwardRule, redirectRule, serveRule } from './intercept/rules.js';
 import { makeJsonSafeReplacer, stringifyJsonSafe } from './model/serialize.js';
+import { extractEngineVersion, isBelowVersion, parseSemver } from './version.js';
+import { assertInterceptAuthOption } from './apikey.js';
 
 // --- shared small types ----------------------------------------------------------------------
 
@@ -194,7 +196,7 @@ export interface ImposterHandle extends AsyncDisposable {
   delete(): Promise<void>;
 }
 
-export type { InterceptOptions } from './intercept/types.js';
+export type { InterceptAuth, InterceptOptions } from './intercept/types.js';
 
 /** TLS-MITM intercept surface (issue #11): point the SUT's HTTPS(+HTTP) proxy at `.url`, decrypt via
  * a minted (or supplied) CA, and match/serve/forward the decrypted requests. */
@@ -705,6 +707,11 @@ function validateInterceptOptions(options: InterceptOptions | undefined): void {
   if (hasCert !== hasKey) {
     throw new InvalidDefinition('intercept caCertPath and caKeyPath must be provided together (both or neither)');
   }
+  // Shape only. Whether this transport can carry a credential at all is decided by
+  // `#startIntercept`, and the version floor by whichever door actually starts the listener: the
+  // embedded FFI parses these options with `deny_unknown_fields`, so an old cdylib rejects `auth`
+  // outright, and the spawn door is gated in `spawn()` before the child starts.
+  assertInterceptAuthOption(options.auth, false);
 }
 
 /** Shared by every transport's "first call" path: asks the backend to start/attach, then wraps the
@@ -809,6 +816,21 @@ export class Engine implements RiftEngine {
 
   async #startIntercept(options: InterceptOptions | undefined): Promise<InterceptHandle> {
     if (this.transport === 'embedded') return this.#startEmbeddedIntercept(options);
+    // Only the embedded backend actually STARTS a listener from these options. Spawn and remote
+    // ATTACH to one the engine already brought up from `--intercept-port`, because there is no
+    // runtime start endpoint yet (rift#493) — `RemoteInterceptBackend.startIntercept` reads `host`
+    // and `port` off the JSON and discards the rest. Accepting `auth` there would drop the
+    // credential on the floor and hand back a handle to an unauthenticated MITM proxy, which is the
+    // precise failure this option exists to prevent. Refuse instead, and name the door that works.
+    if (options?.auth !== undefined) {
+      throw new InterceptUnavailable(
+        `intercept auth cannot be applied over the ${this.transport} transport: its listener is ` +
+          `started by the engine process itself, and there is no runtime endpoint to hand it a ` +
+          `credential (rift#493). Pass it at spawn time instead — ` +
+          `rift.spawn({ intercept: { auth: { username, password } } }) — or use rift.embedded(), ` +
+          `whose listener is started in-process from these options.`
+      );
+    }
     if (this.transport === 'spawn') return this.#startSpawnIntercept(options);
     return this.#startRemoteIntercept(options);
   }
@@ -924,10 +946,6 @@ function configOptions(cfg: Record<string, unknown>): EngineConfigOptions {
   return options !== null && typeof options === 'object' ? (options as EngineConfigOptions) : {};
 }
 
-function extractVersion(cfg: Record<string, unknown>): string | undefined {
-  const { version } = configOptions(cfg);
-  return typeof version === 'string' ? version : undefined;
-}
 
 function buildInfoFromConfig(cfg: Record<string, unknown>): BuildInfo {
   const { version, commit, builtAt } = configOptions(cfg);
@@ -937,21 +955,6 @@ function buildInfoFromConfig(cfg: Record<string, unknown>): BuildInfo {
     builtAt: typeof builtAt === 'string' ? builtAt : undefined,
     features: [],
   };
-}
-
-function parseSemver(version: string): [number, number, number] | undefined {
-  const match = /^v?(\d+)\.(\d+)\.(\d+)/.exec(version);
-  if (match === null) return undefined;
-  return [Number(match[1]), Number(match[2]), Number(match[3])];
-}
-
-/** True when `found` is strictly below `required` (major, then minor, then patch). */
-function isBelowVersion(found: [number, number, number], required: [number, number, number]): boolean {
-  const [fMajor, fMinor, fPatch] = found;
-  const [rMajor, rMinor, rPatch] = required;
-  if (fMajor !== rMajor) return fMajor < rMajor;
-  if (fMinor !== rMinor) return fMinor < rMinor;
-  return fPatch < rPatch;
 }
 
 /** Returns a human-readable problem string when the engine version fails the compatibility gate,
@@ -1003,7 +1006,7 @@ async function connectEngine(url: string, opts: ConnectOptions = {}): Promise<En
 
   const versionCheck = opts.versionCheck ?? 'fail';
   if (versionCheck !== 'off') {
-    const found = extractVersion(await client.config());
+    const found = extractEngineVersion(await client.config());
     const issue = versionIssue(found);
     if (issue !== undefined) {
       if (versionCheck === 'fail') {

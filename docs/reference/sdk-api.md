@@ -701,12 +701,45 @@ interface SpawnOptions {
   datadir?: string; configfile?: string;
   defaultTls?: { cert: string; key: string };     // --default-tls-cert/key
   metricsPort?: number;
-  intercept?: boolean | InterceptOptions;         // --intercept-port (+ CA paths)
+  intercept?: boolean | InterceptOptions;         // --intercept-port (+ CA paths, + auth)
 }
 ```
 
-**`RIFT_INTERCEPT_AUTH`** (`user:pass`) is read from the environment by the engine, and the spawned
-child inherits it — there is no SDK option for it. Because the engine (>= 0.17.0) refuses to start on
+**Intercept credential.** `InterceptOptions.auth` is `{ username, password }` and requires engine
+>= 0.17.0 (issue #124). Which door you use matters:
+
+| Door | Carries `auth`? |
+|---|---|
+| `rift.spawn({ intercept: { auth } })` | yes — the credential is engine startup configuration |
+| `rift.embedded()` then `engine.intercept({ auth })` | yes — the listener is started in-process from these options |
+| `rift.spawn(...)`/`rift.connect(...)` then `engine.intercept({ auth })` | **no — throws `InterceptUnavailable`** |
+
+That last row is a limitation of the engine, not a preference. On the spawn and remote transports
+`engine.intercept()` *attaches* to a listener the engine already brought up from `--intercept-port`;
+there is no runtime endpoint to hand a running listener a credential (rift#493). Rather than accept
+`auth` and silently drop it — handing back a handle to an unauthenticated proxy — the SDK refuses and
+points at `rift.spawn({ intercept: { auth } })`.
+
+Two more behaviours worth knowing:
+
+- On the **spawn** door the credential is placed on the *child's environment*, never on the command
+  line: argv is world-readable through `/proc/<pid>/cmdline` and is captured by `ps` and auditd. For
+  the same reason the username may not contain a colon there — that door colon-joins the two halves
+  into one variable and the engine splits on the first colon — while the embedded runtime door,
+  which carries them separately, accepts one. The option takes precedence over any ambient
+  `RIFT_INTERCEPT_AUTH`, mirroring how `apiKey` beats `MB_APIKEY`.
+- A spawn passing `auth` **probes the resolved binary's `--version` before starting it** and throws
+  `EngineVersionError` below 0.17.0, or when the binary reports no recognizable version. Older
+  engines have no `--intercept-auth` flag, so they never read the variable and would bring the
+  listener up unauthenticated while appearing guarded. The check runs *before* the child is launched
+  because the engine binds its intercept listener before its admin plane — asking the running engine
+  instead would mean an open MITM proxy had already been accepting connections.
+
+A blank username or password is refused on every door, using the same both-trim-dialect rule as the
+admin key.
+
+**`RIFT_INTERCEPT_AUTH`** (`user:pass`) is also read from the environment by the engine, and a
+spawned child inherits it when no `auth` option overrides it. Because the engine (>= 0.17.0) refuses to start on
 a malformed value, a blank half, *or* a valid credential with no listener to guard, the SDK checks it
 before resolving a binary and reports an `InvalidDefinition` instead of an opaque child exit. So an
 ambient value requires `intercept` to be requested: `rift.spawn()` without it, and compat `create()`

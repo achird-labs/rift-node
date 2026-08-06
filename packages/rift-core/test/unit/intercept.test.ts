@@ -25,6 +25,10 @@ import { buildSpawnArgs } from '../../src/spawn/index.js';
 import { connect } from '../../src/remote/client.js';
 import { interceptDispatcher, type ProxyAgentConfig } from '../../src/intercept-undici.js';
 
+/** U+0085 (NEL): whitespace to Rust's `str::trim`, not to JavaScript's. Written as an escape
+ * because the literal character is invisible in an editor. */
+const NEL = '\u0085';
+
 // -------------------------------------------------------------------------------------------
 // Fake InterceptBackend — records every call, returns canned JSON/PEM.
 // -------------------------------------------------------------------------------------------
@@ -293,6 +297,62 @@ describe('issue #101 — serve() normalizes the response into the engine ServeSt
     await expect(handle.serve('x.example.com', { body: { temperature: NaN } })).rejects.toThrow(
       /temperature/
     );
+  });
+
+  it('passes a structured auth credential straight through to the engine (issue #124)', async () => {
+    // The engine's InterceptStartOptions takes `auth: {username, password}` verbatim (camelCase,
+    // deny_unknown_fields), so the option needs no transformation on the way out.
+    const fake = new FakeInterceptBackend();
+    const { engine } = engineOf(fake);
+    await engine.intercept({ auth: { username: 'u', password: 'p' } });
+    expect(JSON.parse(fake.startCalls[0] ?? '{}')).toMatchObject({
+      auth: { username: 'u', password: 'p' },
+    });
+  });
+
+  it('refuses a blank half on the runtime door too (issue #124)', async () => {
+    const fake = new FakeInterceptBackend();
+    const { engine } = engineOf(fake);
+    await expect(engine.intercept({ auth: { username: '  ', password: 'p' } })).rejects.toThrow(
+      InvalidDefinition
+    );
+    await expect(engine.intercept({ auth: { username: 'u', password: '' } })).rejects.toThrow(
+      InvalidDefinition
+    );
+    // U+0085 is whitespace to Rust's str::trim but not to JavaScript's, so a JS-only blank check
+    // would pass it and the engine would then refuse it itself (issue #116).
+    await expect(engine.intercept({ auth: { username: NEL, password: 'p' } })).rejects.toThrow(
+      InvalidDefinition
+    );
+  });
+
+  it('refuses auth on the spawn and remote transports rather than dropping it (issue #124)', async () => {
+    // Only the embedded backend actually starts a listener from these options. On spawn/remote,
+    // RemoteInterceptBackend.startIntercept reads host+port off the JSON and discards the rest —
+    // there is no runtime start endpoint yet (rift#493) — so accepting `auth` here would hand back a
+    // handle to an UNAUTHENTICATED MITM proxy while the caller believed it was guarded.
+    for (const transport of ['spawn', 'remote'] as const) {
+      const engine = new Engine(noopAdmin('http://127.0.0.1:2525'), transport, {
+        ...(transport === 'spawn' ? { interceptSpawn: { host: '127.0.0.1', port: 6800 } } : {}),
+      });
+      const err = await engine
+        .intercept({ auth: { username: 'u', password: 'p' } })
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(InterceptUnavailable);
+      // The message has to name the door that does work, or the caller is simply stuck.
+      expect((err as Error).message).toMatch(/rift\.spawn/);
+    }
+  });
+
+  it('allows a colon in the username on the runtime door (issue #124)', async () => {
+    // Only the spawn door is colon-joined into one env var; the JSON door carries the two halves
+    // separately, so it must not inherit that restriction.
+    const fake = new FakeInterceptBackend();
+    const { engine } = engineOf(fake);
+    await engine.intercept({ auth: { username: 'has:colon', password: 'p' } });
+    expect(JSON.parse(fake.startCalls[0] ?? '{}')).toMatchObject({
+      auth: { username: 'has:colon' },
+    });
   });
 
   it('locates a bad body value by full path (issue #118)', async () => {
