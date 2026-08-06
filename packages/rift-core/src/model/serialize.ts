@@ -58,11 +58,13 @@ export function stringifyJsonSafe(value: unknown, space?: number): string {
   } catch (err) {
     if (err instanceof WireValidationError) throw err;
     // A circular reference (a bare TypeError from JSON.stringify), or anything a value's own
-    // toJSON() threw — an invalid Date raises RangeError. Carry the original text: it is the only
-    // description of what actually went wrong, and a non-Error throw has no `.message` to read.
+    // toJSON() threw — an invalid Date raises RangeError. The text is folded into the message
+    // because a non-Error throw has no `.message` a reader could reach for; `cause` keeps the
+    // thrown value itself, whose type and stack are the rest of the description.
     throw new WireValidationError(
       `value is not JSON-serializable: ${err instanceof Error ? err.message : String(err)}`,
-      '$'
+      '$',
+      { cause: err }
     );
   }
   // Only a top-level `undefined` gets here: a function, symbol or bigint in that position throws

@@ -20,6 +20,7 @@ import {
   type Imposter,
   type ImpostersConfig,
 } from '../../src/model/index.js';
+import { stringifyJsonSafe } from '../../src/model/serialize.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const fixturesDir = path.join(here, '..', 'fixtures', 'mb');
@@ -422,5 +423,92 @@ describe('wire model — serialization is JSON-safe (no silent loss)', () => {
     expect(json).toContain('"negZero":0');
     expect(json).toContain(`"max":${Number.MAX_VALUE}`);
     expect(json).toContain('"n":42');
+  });
+});
+
+describe('wire model — a wrapped serialization failure keeps the original error as `cause` (issue #121)', () => {
+  it('carries a cause when one is supplied', () => {
+    const original = new TypeError('converting circular structure to JSON');
+    const err = new WireValidationError('value is not JSON-serializable', '$.imposters', { cause: original });
+    expect(err.cause).toBe(original);
+    // Widening the constructor must not disturb what it already sets.
+    expect(err.path).toBe('$.imposters');
+    expect(err.message).toBe('value is not JSON-serializable (at $.imposters)');
+    expect(err.name).toBe('WireValidationError');
+    expect(err).toBeInstanceOf(WireValidationError);
+  });
+
+  it('stays backward compatible with two-arg construction', () => {
+    const err = new WireValidationError('value is not JSON-serializable', '$.imposters');
+    expect(err.cause).toBeUndefined();
+    expect(err.path).toBe('$.imposters');
+    expect(err.message).toBe('value is not JSON-serializable (at $.imposters)');
+  });
+
+  it('attaches the original TypeError from a circular reference', () => {
+    const model: Record<string, unknown> = { imposters: [] };
+    model.self = model;
+    let caught: unknown;
+    try {
+      toWireString(model as unknown as ImpostersConfig);
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(WireValidationError);
+    // The type and stack of the throw JSON.stringify raised are the only description of what went
+    // wrong; before #121 only its message text survived.
+    expect((caught as WireValidationError).cause).toBeInstanceOf(TypeError);
+  });
+
+  it('attaches the RangeError a toJSON() raised', () => {
+    const original = new RangeError('Invalid time value');
+    const value = {
+      toJSON(): never {
+        throw original;
+      },
+    };
+    let caught: unknown;
+    try {
+      stringifyJsonSafe(value);
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(WireValidationError);
+    expect((caught as WireValidationError).cause).toBe(original);
+  });
+
+  it('attaches a non-Error throw verbatim as the cause', () => {
+    const value = {
+      toJSON(): never {
+        throw 'boom';
+      },
+    };
+    let caught: unknown;
+    try {
+      stringifyJsonSafe(value);
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(WireValidationError);
+    // A non-Error throw has no `.message` to fold into the text, so the raw value is the only
+    // record of it — `ErrorOptions.cause` is `unknown`, so there is nothing to narrow first.
+    expect((caught as WireValidationError).cause).toBe('boom');
+    expect((caught as WireValidationError).message).toContain('boom');
+  });
+
+  it('propagates a replacer WireValidationError un-rewrapped', () => {
+    let caught: unknown;
+    try {
+      stringifyJsonSafe({ n: BigInt(1) });
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(WireValidationError);
+    // Re-wrapping would flatten the precise key locator to the root and bury the real message one
+    // level down, so the replacer's own error must pass straight through — with no cause bolted on.
+    expect((caught as WireValidationError).path).toBe('…n');
+    expect((caught as WireValidationError).message).toContain('bigint');
+    expect((caught as WireValidationError).message).not.toContain('value is not JSON-serializable');
+    expect((caught as WireValidationError).cause).toBeUndefined();
   });
 });

@@ -76,8 +76,8 @@ export class CommunicationError extends RiftError {
 export class WireValidationError extends RiftError {
   readonly path: string;
 
-  constructor(message: string, path: string) {
-    super(`${message} (at ${path})`);
+  constructor(message: string, path: string, options?: ErrorOptions) {
+    super(`${message} (at ${path})`, options);
     this.name = 'WireValidationError';
     this.path = path;
   }

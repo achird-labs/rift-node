@@ -250,7 +250,7 @@ class ImposterNotFound extends RiftError         // 404
 class EngineError extends RiftError              // other engine failure; .code
 class EngineUnavailable extends RiftError        // spawn/connect/load failure; .cause
 class CommunicationError extends RiftError       // transport-level (HTTP/FFI)
-class WireValidationError extends RiftError      // wire codec, in and out; .path
+class WireValidationError extends RiftError      // wire codec, in and out; .path .cause?
 class VerificationError extends RiftError        // verify() miss; .expected .count .recorded .closest
 class UnsupportedPredicateError extends RiftError// client-side verify hit xpath/inject
 class EngineVersionError extends RiftError       // preflight: engine < minEngineVersion; .found .required
@@ -268,6 +268,12 @@ options — is refused before it is sent if JSON cannot represent it honestly: a
 key. The request is never sent, so a refusal leaves no partial state on the engine. Intercept *rules*
 are the one exception to the type: `serve()`/`forward()`/`addRule()` report the same failure as
 `InvalidDefinition`, because issue #101 fixed that surface to a single error type.
+
+Some outbound failures originate outside the SDK's own checks — a circular reference, which
+`JSON.stringify` rejects with a bare `TypeError`, or whatever a value's own `toJSON()` threw. Those
+are re-thrown as `WireValidationError` with the original attached as `.cause` (issue #121), so its
+type and stack survive the wrapping; `.path` is `$`, since the throw names no key. `.cause` is
+`undefined` on a refusal the SDK detected itself, which is every case in the previous paragraph.
 
 ## 5. DSL — full grammar
 
