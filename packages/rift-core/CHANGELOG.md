@@ -7,6 +7,21 @@ All notable changes to `@rift-vs/rift` are documented here. This project adheres
 
 ### Fixed
 
+- **A refused value is located by a full JSONPath, not just its key** (issue #118).
+  `WireValidationError.path` was already documented as "a JSONPath-ish locator of the offending
+  node", but the replacer could only see the key it was handed, so a bad value inside a posted array
+  reported `…statusCode` and left the caller to bisect the array by hand to find which element
+  carried it. It now reports `$[2].action.serve.statusCode`.
+
+  Array indices are spelled `[2]`, identifier-safe keys `.name`, and anything else is quoted —
+  `$.headers["Content-Type"]`, which matters because header names are not identifiers. This applies
+  at every serializing call site, including `intercept.serve()` bodies and `addRule()`.
+
+  Only the locator text changed — exactly the same inputs are refused as before, and the error type
+  is unchanged. Note the path is interpolated into the message (`… (at $[2].action…)`), so a caller
+  asserting on message *text* is affected just as one asserting on `.path` is; matching on the error
+  type, or on the part of the message before the locator, is not.
+
 - **An `undefined` array element is refused instead of reaching the engine as `null`** (issue #119).
   `JSON.stringify` treats the two `undefined` positions differently: an object *property* is dropped,
   but an array *element* is rendered as `null`. `jsonSafeReplacer` checked neither, so

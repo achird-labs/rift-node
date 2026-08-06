@@ -295,6 +295,21 @@ describe('issue #101 — serve() normalizes the response into the engine ServeSt
     );
   });
 
+  it('locates a bad body value by full path (issue #118)', async () => {
+    // toBody() serializes the body as its OWN root, unlike addRule() where the rule is nested in an
+    // array — so this call site exercises a distinct path-construction shape and gets its own pin.
+    const fake = new FakeInterceptBackend();
+    const { engine } = engineOf(fake);
+    const handle = await engine.intercept();
+    const caught = await handle
+      .serve('x.example.com', { body: { readings: [1, { temperature: NaN }] } })
+      .catch((e: unknown) => e);
+    expect(caught).toBeInstanceOf(InvalidDefinition);
+    expect(((caught as InvalidDefinition).cause as WireValidationError).path).toBe(
+      '$.readings[1].temperature'
+    );
+  });
+
   it("rejects the four headers the engine's proxy manages itself (issue #107)", async () => {
     for (const name of ['Host', 'Connection', 'content-Length', 'TRANSFER-ENCODING']) {
       await serveRejects({ headers: { [name]: 'x' } });
@@ -432,6 +447,27 @@ describe('issue #111 — addRule() refuses values JSON cannot represent', () => 
     const handle = await engine.intercept();
     const caught = await handle.addRule([valid, undefined] as unknown as InterceptRule[]).catch((e: unknown) => e);
     expect((caught as InvalidDefinition).cause).toBeInstanceOf(WireValidationError);
+  });
+
+  it('names which rule in the array carried the bad value (issue #118)', async () => {
+    // The whole point of the issue: with three rules posted at once, "statusCode" alone forced the
+    // caller to bisect by hand. addRule() is a second, independent caller of the replacer, so the
+    // full locator has to reach this path too and not just toWireString()'s.
+    const fake = new FakeInterceptBackend();
+    const { engine } = engineOf(fake);
+    const handle = await engine.intercept();
+    const rules = [
+      { host: 'a.example.com', action: { serve: { statusCode: 200 } } },
+      { host: 'b.example.com', action: { serve: { statusCode: 200 } } },
+      { host: 'c.example.com', action: { serve: { statusCode: NaN } } },
+    ] as unknown as InterceptRule[];
+    const caught = await handle.addRule(rules).catch((e: unknown) => e);
+    expect(caught).toBeInstanceOf(InvalidDefinition);
+    expect((caught as InvalidDefinition).cause).toBeInstanceOf(WireValidationError);
+    expect(((caught as InvalidDefinition).cause as WireValidationError).path).toBe(
+      '$[2].action.serve.statusCode'
+    );
+    expect(fake.addRulesCalls).toEqual([]);
   });
 
   it('rejects a non-finite value nested inside and/or/not predicate combinators', async () => {
