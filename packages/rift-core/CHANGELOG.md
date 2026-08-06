@@ -7,6 +7,23 @@ All notable changes to `@rift-vs/rift` are documented here. This project adheres
 
 ### Fixed
 
+- **A wrapped serialization failure keeps the original error as `cause`** (issue #121).
+  `stringifyJsonSafe()` is the choke point every outbound admin payload serializes through, and when
+  `JSON.stringify` threw something the SDK had not raised itself — a bare `TypeError` from a circular
+  reference, or whatever a value's own `toJSON()` threw — it kept only the message *text*. The error
+  object, its type and its stack were discarded, which is the information you actually want when the
+  failure came from outside the SDK's own checks.
+
+  `WireValidationError` now accepts `ErrorOptions` like its siblings (`InvalidDefinition`,
+  `EngineUnavailable`, `CommunicationError`) and `stringifyJsonSafe()` attaches `{ cause }`. The
+  inconsistency was forced by the constructor's signature rather than chosen: the intercept path's
+  `toBody()` and `addRule()` already preserved the cause this way.
+
+  Purely additive — the third parameter is optional, every existing call site is unchanged, and the
+  message text is byte-identical. `.cause` is `undefined` on the refusals the SDK detects itself (a
+  non-finite number, a `bigint`, a function, a symbol), which still pass through with their precise
+  `.path` and are never re-wrapped.
+
 - **An ambient `RIFT_INTERCEPT_AUTH` is validated before a binary is resolved** (issue #115). The
   engine declares `--intercept-auth <USER:PASS>` with `env = "RIFT_INTERCEPT_AUTH"`, and both
   transports that spawn a child inherit `process.env` wholesale — so the variable is engine
