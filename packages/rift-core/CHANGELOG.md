@@ -5,6 +5,49 @@ All notable changes to `@rift-vs/rift` are documented here. This project adheres
 
 ## Unreleased
 
+### Added
+
+- **`InterceptOptions.auth` — a per-call intercept credential** (issue #124). The engine's intercept
+  proxy takes a credential, but the SDK exposed no way to set one: the only channel was an ambient
+  `RIFT_INTERCEPT_AUTH`, which is process-wide. Two engines in one process could not use different
+  credentials, and tests had to mutate `process.env`, which is order-dependent and leaks across
+  cases. This was also asymmetric with the admin key, where `apiKey` has long been a first-class
+  option that beats `MB_APIKEY`.
+
+  `auth` is `{ username, password }` — the shape the engine's own `InterceptStartOptions.auth` takes,
+  so it needs no transformation. It is honoured by the doors that actually START a listener:
+  `rift.spawn({ intercept: { auth } })`, and `engine.intercept({ auth })` on the **embedded**
+  transport. On spawn/remote, `engine.intercept()` only *attaches* to a listener the engine already
+  brought up, and there is no runtime endpoint to hand a running listener a credential (rift#493) —
+  so `auth` there throws `InterceptUnavailable` naming `rift.spawn()` instead of being accepted and
+  silently discarded, which would hand back a handle to an unauthenticated proxy.
+
+  An explicit option beats the ambient variable, mirroring `apiKey` / `MB_APIKEY`; when it is set the
+  ambient value is never passed to the child, so a malformed ambient value no longer fails a spawn
+  that overrides it.
+
+  On the spawn door the credential travels on the **child's environment, not argv** — argv is
+  world-readable via `/proc/<pid>/cmdline` and is captured by `ps`/auditd, and unlike `apiKey` this
+  option has no historical command-line contract to keep. `buildSpawnArgs` is typed
+  `Omit<InterceptOptions, 'auth'>` so a credential silently dropped from the command line is
+  unrepresentable rather than merely undocumented. That door also rejects a username containing a
+  colon, because it colon-joins the halves into one variable and the engine splits on the first
+  colon; the runtime door carries them separately and accepts one.
+
+  A spawn passing `auth` now probes the resolved binary's `--version` **before launching it** and
+  fails with `EngineVersionError` below **0.17.0**, or when the binary reports no recognizable
+  version. Below that the `--intercept-auth` flag does not exist, so clap never reads the variable
+  and the listener would come up unauthenticated while the caller believed it was guarded — a silent
+  downgrade the engine cannot report, because from its side nothing happened. A gate that cannot
+  confirm the credential will be enforced must not assume that it will.
+
+  The check deliberately runs *before* the child starts rather than asking the running engine's
+  `/config`: the engine binds its intercept listener before its admin plane, so a post-startup check
+  could only shorten the window in which an unauthenticated MITM proxy was already accepting
+  connections, not prevent it. A spawn without `auth` never probes and is unchanged.
+
+  Blank halves are refused on both doors under the same both-trim-dialect rule as the admin key.
+
 ### Fixed
 
 - **A refused value is located by a full JSONPath, not just its key** (issue #118).

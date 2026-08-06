@@ -71,6 +71,49 @@ export function assertApiKeyNotBlank(apiKey: string | undefined, source: ApiKeyS
 }
 
 /**
+ * The engine release that introduced intercept-proxy auth — `--intercept-auth` / the `auth` field on
+ * `POST /intercept` (rift#878, rift#885). Below it the flag does not exist, so the environment
+ * variable is never read.
+ */
+export const MIN_INTERCEPT_AUTH_ENGINE = '0.17.0';
+
+/**
+ * Rejects an `InterceptOptions.auth` the engine would refuse (issue #124).
+ *
+ * Blank halves are refused on both doors, mirroring `InterceptAuth::validate` engine-side and using
+ * the same both-dialect {@link isBlank} as the admin key — a blank secret switches the gate on and
+ * then admits everyone, which is worse than no gate because the operator believes one is in force.
+ *
+ * `viaEnvVar` marks the spawn door, whose only channel is the colon-joined `RIFT_INTERCEPT_AUTH`.
+ * The engine splits that on the FIRST colon, so a username containing one would silently
+ * authenticate as its prefix with the remainder folded into the password — refuse it rather than
+ * ship a credential that means something other than what the caller wrote. The runtime door carries
+ * the two halves separately and has no such limit, so it does not inherit the restriction.
+ */
+export function assertInterceptAuthOption(
+  auth: { username: string; password: string } | undefined,
+  viaEnvVar: boolean
+): void {
+  if (auth === undefined) return;
+  if (isBlank(auth.username) || isBlank(auth.password)) {
+    throw new InvalidDefinition(
+      'intercept auth needs a non-blank username and password: a blank half would enable the ' +
+        'intercept gate and then accept every request, so the engine refuses to start with one. ' +
+        'Omit auth entirely to run the intercept listener explicitly unauthenticated.'
+    );
+  }
+  if (viaEnvVar && auth.username.includes(':')) {
+    throw new InvalidDefinition(
+      'intercept auth username must not contain a colon when passed to rift.spawn(): the engine ' +
+        'reads this credential from RIFT_INTERCEPT_AUTH as "user:pass" and splits on the first ' +
+        'colon, so the username would be truncated and the rest folded into the password. Use a ' +
+        'colon-free username, or start the listener with engine.intercept({ auth }), which carries ' +
+        'the two halves separately.'
+    );
+  }
+}
+
+/**
  * Rejects an ambient `RIFT_INTERCEPT_AUTH` the engine would refuse to start on (issue #115).
  *
  * The engine declares `--intercept-auth <USER:PASS>` with `env = "RIFT_INTERCEPT_AUTH"`, and a
@@ -100,10 +143,14 @@ export function assertApiKeyNotBlank(apiKey: string | undefined, source: ApiKeyS
  * escape for the rest. Contrast `assertApiKeyNotBlank`, which is version-independent because a blank
  * key is unsafe on *every* engine.
  *
- * A valid credential *with* a listener is passed through untouched: an ambient variable is currently
- * the only way to give a spawned engine an intercept credential, so over-rejecting would remove the
- * feature. Blankness matches {@link isBlank}, since the engine judges these halves with the same
- * Rust `str::trim` as the admin key.
+ * A valid credential *with* a listener is passed through untouched. Blankness matches
+ * {@link isBlank}, since the engine judges these halves with the same Rust `str::trim` as the admin
+ * key.
+ *
+ * This guard covers the *ambient* variable only. Since issue #124 there is also a first-class
+ * `InterceptOptions.auth`, validated by {@link assertInterceptAuthOption}; when it is set, `spawn()`
+ * overwrites this variable on the child's environment and skips this check entirely, because the
+ * inherited value can no longer reach the engine.
  */
 export function assertInterceptAuthValid(value: string | undefined, interceptEnabled: boolean): void {
   if (value === undefined) return;
