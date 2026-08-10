@@ -170,7 +170,9 @@ describe('issue #11 — intercept rule building (wire snapshots)', () => {
     const fake = new FakeInterceptBackend();
     const { engine } = engineOf(fake);
     const handle = await engine.intercept();
-    await expect(handle.serve('x.example.com', created().latency(10))).resolves.toBeUndefined();
+    // A latency() is a `_behaviors.wait` the serve action cannot carry, so it is refused rather
+    // than quietly served without the delay (issue #131) — it used to resolve.
+    await expect(handle.serve('x.example.com', created().latency(10))).rejects.toThrow(InvalidDefinition);
     // A proxy-only builder has no `is` block — that IS rejected.
     const { proxyTo } = await import('../../src/dsl/proxy.js');
     await expect(handle.serve('x.example.com', proxyTo('http://origin.example.com'))).rejects.toThrow(
@@ -270,8 +272,11 @@ describe('issue #101 — serve() normalizes the response into the engine ServeSt
     await serveRejects({ _mode: 'binary', body: 'AAEC' });
   });
 
-  it("drops _mode:'text' and unknown keys, and does not mutate the caller's response", async () => {
-    const response: IsResponse = { statusCode: 200, body: 'hi', _mode: 'text', _behaviors: { wait: 5 } };
+  it("drops _mode:'text' and does not mutate the caller's response", async () => {
+    // `_mode:'text'` is the one key that is genuinely droppable — it is the engine's only mode, so
+    // removing it changes nothing that would be served. A `_behaviors` block is NOT droppable and
+    // now rejects (issue #131), so it is no longer part of this case.
+    const response: IsResponse = { statusCode: 200, body: 'hi', _mode: 'text' };
     const before = JSON.parse(JSON.stringify(response)) as IsResponse;
     expect(await serveWire(response)).toEqual({ statusCode: 200, body: 'hi' });
     expect(response).toEqual(before);
@@ -297,6 +302,157 @@ describe('issue #101 — serve() normalizes the response into the engine ServeSt
     await expect(handle.serve('x.example.com', { body: { temperature: NaN } })).rejects.toThrow(
       /temperature/
     );
+  });
+
+  // --- issue #131: constructs the serve action cannot deliver ---
+
+  /** The InvalidDefinition message from a rejected serve(), for asserting on what it NAMES. */
+  async function serveError(response: ResponseBuilder | IsResponse): Promise<string> {
+    const fake = new FakeInterceptBackend();
+    const { engine } = engineOf(fake);
+    const handle = await engine.intercept();
+    const caught = await handle.serve('x.example.com', response).catch((e: unknown) => e);
+    expect(caught).toBeInstanceOf(InvalidDefinition);
+    return (caught as InvalidDefinition).message;
+  }
+
+  it('rejects every _behaviors key, naming it and the DSL method that set it (issue #131)', async () => {
+    const cases: Array<[ResponseBuilder, string, string]> = [
+      [ok('x').latency(10), '_behaviors.wait', 'latency()'],
+      [ok('x').repeat(2), '_behaviors.repeat', 'repeat()'],
+      [ok('x').decorate('(r) => r'), '_behaviors.decorate', 'decorate()'],
+      [ok('x').shellTransform('cat'), '_behaviors.shellTransform', 'shellTransform()'],
+      [ok('x').copy({ from: 'path', into: '${p}', using: { method: 'regex', selector: '.' } }), '_behaviors.copy', 'copy()'],
+      [ok('x').lookup({ key: { from: 'q', using: { method: 'regex', selector: '.' } }, fromDataSource: { csv: { path: 'p', keyColumn: 'k' } }, into: '${x}' }), '_behaviors.lookup', 'lookup()'],
+    ];
+    for (const [builder, wireKey, method] of cases) {
+      const message = await serveError(builder);
+      expect(message).toContain(wireKey);
+      expect(message).toContain(method);
+    }
+  });
+
+  it('rejects an unknown _behaviors key set through behavior() (issue #131)', async () => {
+    // `behavior()` is the open escape hatch, so the guard cannot work off a fixed key list alone.
+    expect(await serveError(ok('x').behavior({ someFutureBehavior: 1 }))).toContain('_behaviors.someFutureBehavior');
+  });
+
+  it('rejects every _rift extension, naming it and its DSL method (issue #131)', async () => {
+    const { Fault } = await import('../../src/dsl/fault.js');
+    expect(await serveError(ok('x').templated())).toContain('_rift.templated');
+    expect(await serveError(ok('x').templated())).toContain('templated()');
+    expect(await serveError(ok('x').script({ code: 'return 1' }))).toContain('_rift.script');
+    expect(await serveError(ok('x').script({ code: 'return 1' }))).toContain('script()');
+    // The fault family carries a method annotation too — that is the whole "name the caller's own
+    // spelling" guarantee, so assert it here and not only the wire key.
+    expect(await serveError(ok('x').withFault(Fault.latency(50)))).toContain('_rift.fault.latency');
+    expect(await serveError(ok('x').withFault(Fault.latency(50)))).toContain('withFault(');
+    expect(await serveError(ok('x').withFault(Fault.error({ status: 500 })))).toContain('_rift.fault.error');
+    expect(await serveError(ok('x').withFault(Fault.error({ status: 500 })))).toContain('withFault(');
+    expect(await serveError(ok('x').withFault(Fault.tcp('reset')))).toContain('_rift.fault.tcp');
+    expect(await serveError(ok('x').withFault(Fault.tcp('reset')))).toContain('withFault(');
+    // The legacy fault() spelling lands in the same _rift.fault.tcp slot.
+    expect(await serveError(ok('x').fault('reset'))).toContain('_rift.fault.tcp');
+  });
+
+  it('names EVERY offender in one error rather than the first one found (issue #131)', async () => {
+    // First-wins would send a caller round the loop once per construct, each time reporting a rule
+    // they had already been told was unusable.
+    const message = await serveError(ok('x').latency(10).repeat(2).templated().script({ code: 'return 1' }));
+    for (const named of ['_behaviors.wait', '_behaviors.repeat', '_rift.templated', '_rift.script']) {
+      expect(message).toContain(named);
+    }
+  });
+
+  it('points at redirectTo() and explains why, matching the sibling SDKs (issue #131)', async () => {
+    const message = await serveError(ok('x').latency(10));
+    expect(message).toContain('intercept serve cannot deliver');
+    expect(message).toContain('statusCode, headers and body');
+    expect(message).toContain('redirectTo(imposter)');
+  });
+
+  it('rejects the same constructs inside a raw IsResponse literal (issue #131)', async () => {
+    // The literal path never went through ResponseBuilder, so it needs its own guard — these used to
+    // be dropped as unknown keys.
+    expect(await serveError({ statusCode: 200, _behaviors: { wait: 5 } })).toContain('_behaviors.wait');
+    expect(await serveError({ statusCode: 200, _rift: { templated: true } })).toContain('_rift.templated');
+    expect(await serveError({ statusCode: 200, _rift: { fault: { tcp: 'reset' } } })).toContain('_rift.fault.tcp');
+  });
+
+  it('rejects an unknown key rather than dropping it (issue #131)', async () => {
+    // Top level, via raw() — the whole patch used to vanish.
+    expect(await serveError(ok('x').raw({ bogusTopLevel: 1 } as never))).toContain('bogusTopLevel');
+    // Inside the is literal.
+    expect(await serveError({ statusCode: 200, bogusIsKey: 1 } as never)).toContain('bogusIsKey');
+  });
+
+  it('still serves a plain response, and leaves forward()/redirectTo() untouched (issue #131)', async () => {
+    expect(await serveWire(ok('hi').header('X-A', 'b'))).toEqual({
+      statusCode: 200,
+      headers: { 'X-A': 'b' },
+      body: 'hi',
+    });
+    const fake = new FakeInterceptBackend();
+    const { engine } = engineOf(fake);
+    const handle = await engine.intercept();
+    await expect(handle.forward('a.example.com', 4545)).resolves.toBeUndefined();
+    await expect(handle.redirectTo({ port: 4545 } as ImposterHandle)).resolves.toBeUndefined();
+  });
+
+  it('refuses a _behaviors/_rift block that is not an object, instead of letting it through', async () => {
+    // The guard walks a block's own keys, and a NON-object has none — `Object.keys(Object(false))`,
+    // `Object.keys(Object(5))` and `Object.keys(new Map([['wait',10]]))` are all `[]`. Walking those
+    // reported nothing and served the response silently, which is the very drop this guard exists to
+    // stop. `_behaviors: cond && behaviours` collapsing to `false` is the ordinary way to write it.
+    for (const bad of [false, 5, 'abc', ['a'], new Map([['wait', 10]]), null]) {
+      expect(await serveError({ statusCode: 200, _behaviors: bad } as never)).toContain('_behaviors');
+      expect(await serveError({ statusCode: 200, _rift: bad } as never)).toContain('_rift');
+      expect(await serveError({ statusCode: 200, _rift: { fault: bad } } as never)).toContain('_rift.fault');
+    }
+  });
+
+  it('names a malformed block whole rather than enumerating its characters', async () => {
+    // The string case used to produce `_behaviors.0`, `_behaviors.1`, `_behaviors.2` — loud, but
+    // nonsense to act on.
+    const message = await serveError({ statusCode: 200, _behaviors: 'abc' } as never);
+    expect(message).toContain('`_behaviors`');
+    expect(message).not.toContain('_behaviors.0');
+  });
+
+  it('treats an absent or explicitly-undefined block as nothing to deliver (issue #131)', async () => {
+    // `_behaviors: {}` carries no behaviour, and an `undefined` property is dropped by JSON.stringify
+    // anyway — neither loses anything, so neither may be refused (an optional spread produces both).
+    expect(await serveWire({ statusCode: 200, _behaviors: {} } as never)).toEqual({ statusCode: 200 });
+    expect(await serveWire({ statusCode: 200, _behaviors: undefined, _rift: undefined } as never)).toEqual({
+      statusCode: 200,
+    });
+  });
+
+  it('refuses a non-object response with InvalidDefinition, not a raw TypeError (issue #131)', async () => {
+    // `null` used to escape as `TypeError: Cannot read properties of null`, breaking serve()'s
+    // InvalidDefinition-only error contract (issue #101); a string registered an empty `serve: {}`.
+    for (const bad of [null, 'hello', 42]) {
+      expect(await serveError(bad as never)).toContain('must be an object');
+    }
+    expect(await serveError(ok('x').raw({ is: 'oops' } as never))).toContain('must be an object');
+  });
+
+  it('names offenders from every level in one error (issue #131)', async () => {
+    // All four branches of the traversal firing at once: a top-level raw() key, a behaviour, a _rift
+    // extension, and an unknown key inside the is block.
+    const message = await serveError(
+      ok('x').latency(10).templated().raw({ bogusTop: 1, is: { statusCode: 200, bogusIs: 2 } } as never)
+    );
+    for (const named of ['bogusTop', '_behaviors.wait', '_rift.templated', 'bogusIs']) {
+      expect(message).toContain(named);
+    }
+  });
+
+  it('reports the undeliverable construct before the body-serialization guard (issue #131)', async () => {
+    // Ordering is observable: the #131 guard runs before toServeStub/toBody, so a response with both
+    // an undeliverable behaviour and an unserializable body names the behaviour.
+    const message = await serveError({ statusCode: 200, body: new Set([1]), _behaviors: { wait: 5 } } as never);
+    expect(message).toContain('_behaviors.wait');
   });
 
   it('rejects a Map or Set body instead of serving it as {} (issue #126)', async () => {
