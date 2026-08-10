@@ -480,6 +480,129 @@ describe('wire model — serialization is JSON-safe (no silent loss)', () => {
   });
 });
 
+describe('wire model — built-ins JSON.stringify would emit as {} (issue #126)', () => {
+  const caughtFrom = (fn: () => unknown): WireValidationError => {
+    let caught: unknown;
+    try {
+      fn();
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(WireValidationError);
+    return caught as WireValidationError;
+  };
+
+  it('refuses a Map, naming the type and its full JSONPath', () => {
+    // The reported defect: the entire collection's contents vanish, so the engine sees `{}` where
+    // the caller wrote data — with nothing thrown on this side to correlate against.
+    const model = {
+      imposters: [{ protocol: 'http', _rift: { hosts: new Map([['a', 1]]) } }],
+    } as unknown as ImpostersConfig;
+    const err = caughtFrom(() => toWireString(model));
+    expect(err.path).toBe('$.imposters[0]._rift.hosts');
+    expect(err.message).toContain('Map');
+  });
+
+  it('refuses a Set array element with an indexed path', () => {
+    // `new Set(hosts)` is the natural way to dedupe a predicate list, so this is the shape a
+    // caller actually hits.
+    const err = caughtFrom(() => stringifyJsonSafe([1, new Set([1, 2, 3])]));
+    expect(err.path).toBe('$[1]');
+    expect(err.message).toContain('Set');
+  });
+
+  it('refuses every slot-backed built-in, naming each one', () => {
+    const cases: Array<[string, unknown]> = [
+      ['Map', new Map()],
+      ['Set', new Set()],
+      ['WeakMap', new WeakMap()],
+      ['WeakSet', new WeakSet()],
+      ['RegExp', /abc/u],
+      ['Promise', Promise.resolve(1)],
+      ['ArrayBuffer', new ArrayBuffer(8)],
+      ['SharedArrayBuffer', new SharedArrayBuffer(8)],
+      ['DataView', new DataView(new ArrayBuffer(8))],
+    ];
+    for (const [name, value] of cases) {
+      // Sanity-check the premise rather than trusting it: each of these really does stringify to
+      // `{}` today, which is why it needs a guard at all.
+      expect(JSON.stringify(value)).toBe('{}');
+      const err = caughtFrom(() => stringifyJsonSafe({ field: value }));
+      expect(err.path).toBe('$.field');
+      expect(err.message).toContain(name);
+    }
+  });
+
+  it('refuses a binary buffer reaching flow state as caller data', () => {
+    // `setFlowState` takes `unknown`, so a caller stashing binary data hits this path with no type
+    // error to warn them first.
+    const err = caughtFrom(() => stringifyJsonSafe({ blob: new ArrayBuffer(4) }));
+    expect(err.message).toContain('ArrayBuffer');
+  });
+
+  it('catches one of these even when a toJSON() returned it', () => {
+    // toJSON runs before the replacer, so what the guard judges is the RETURNED value — a toJSON
+    // that hands back a Map is the same total loss as a bare one, and must not slip through.
+    const sneaky = { toJSON: () => new Map([['a', 1]]) };
+    const err = caughtFrom(() => stringifyJsonSafe({ v: sneaky }));
+    expect(err.path).toBe('$.v');
+    expect(err.message).toContain('Map');
+  });
+
+  it('refuses one of these at the root, with the root path', () => {
+    const err = caughtFrom(() => stringifyJsonSafe(new Map([['a', 1]])));
+    expect(err.path).toBe('$');
+    expect(err.message).toContain('Map');
+  });
+
+  it('names the built-in, not a subclass — and still refuses the subclass', () => {
+    class HostSet extends Set<string> {}
+    const err = caughtFrom(() => stringifyJsonSafe({ hosts: new HostSet(['a']) }));
+    expect(err.message).toContain('Set');
+    expect(err.message).not.toContain('HostSet');
+  });
+
+  it('lets a value with its own toJSON serialize through it', () => {
+    // toJSON runs before the replacer, so custom serialization keeps working with no carve-out —
+    // the guard must not pre-empt a caller who has said how their type serializes.
+    class Tagged extends Map<string, number> {
+      toJSON(): unknown {
+        return { tagged: [...this.keys()] };
+      }
+    }
+    expect(stringifyJsonSafe({ v: new Tagged([['a', 1]]) })).toBe('{"v":{"tagged":["a"]}}');
+  });
+
+  it('does not refuse an Error or a typed-array view — and keeps what they do carry', () => {
+    // Neither loses its payload the way the guarded set does, so both stay serializable. Asserted on
+    // the output rather than with `.not.toThrow()`, so a future guard that silently emptied them
+    // would fail here instead of passing.
+    expect(JSON.parse(stringifyJsonSafe({ e: Object.assign(new Error('boom'), { code: 42 }) }))).toEqual({
+      e: { code: 42 },
+    });
+    expect(JSON.parse(stringifyJsonSafe({ t: new Uint8Array([1, 2]) }))).toEqual({ t: { '0': 1, '1': 2 } });
+  });
+
+  it('does not refuse an ordinary class instance that happens to render as {}', () => {
+    // The membership rule is an explicit built-in list, not "renders as {}" — a domain object whose
+    // state is private fields or getters renders that way too, and refusing it would reject the
+    // plain objects callers legitimately send.
+    class Opaque {
+      readonly #secret = 1;
+      get derived(): number {
+        return this.#secret;
+      }
+    }
+    expect(JSON.stringify(new Opaque())).toBe('{}');
+    expect(stringifyJsonSafe({ o: new Opaque() })).toBe('{"o":{}}');
+  });
+
+  it('leaves plain objects, arrays and null untouched', () => {
+    const plain = { a: [1, 2, { b: null }], c: 'x' };
+    expect(JSON.parse(stringifyJsonSafe(plain))).toEqual(plain);
+  });
+});
+
 describe('wire model — error paths are full JSONPath locators (issue #118)', () => {
   const pathOfThrow = (fn: () => unknown): string => {
     let caught: unknown;
