@@ -10,17 +10,160 @@ import { makeJsonSafeReplacer } from '../model/serialize.js';
 import { ResponseBuilder } from '../dsl/response.js';
 import type { ImposterHandle } from '../engine.js';
 
-/** A `ResponseBuilder` is only valid here when it builds a plain `is` block — proxy/inject/native-fault
- * responses have no meaning as an intercept `serve` action. */
+/** The `is` fields the engine's serve action can actually carry. `_mode` is here because `'text'` is
+ * the engine's only mode and dropping it changes nothing served; `'binary'` is refused separately by
+ * {@link toServeStub}, which can say something far more useful about it. */
+const DELIVERABLE_IS_KEYS = new Set(['statusCode', 'headers', 'body', '_mode']);
+
+/** Wire key → the DSL method that sets it. The error names the caller's own spelling, not just the
+ * wire shape, because `_behaviors.wait` is not what they typed — `latency(10)` is. */
+const BEHAVIOR_METHODS: Record<string, string> = {
+  wait: 'latency()',
+  repeat: 'repeat()',
+  decorate: 'decorate()',
+  shellTransform: 'shellTransform()',
+  copy: 'copy()',
+  lookup: 'lookup()',
+};
+
+const RIFT_METHODS: Record<string, string> = {
+  script: 'script()',
+  templated: 'templated()',
+};
+
+const FAULT_METHODS: Record<string, string> = {
+  latency: 'withFault(Fault.latency(…))',
+  error: 'withFault(Fault.error(…))',
+  tcp: 'withFault(Fault.tcp(…)) or fault()',
+};
+
+function named(key: string, method: string | undefined): string {
+  return method === undefined ? `\`${key}\`` : `\`${key}\` (${method})`;
+}
+
+/** A `{...}` literal or a null-prototype object — the only shapes whose own keys describe their whole
+ * content. Deliberately excludes arrays and class instances: `new Map([['wait', 10]])` enumerates to
+ * NO own keys, so treating it as walkable would report nothing and wave it through. */
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (typeof value !== 'object' || value === null) return false;
+  const proto = Object.getPrototypeOf(value) as unknown;
+  return proto === Object.prototype || proto === null;
+}
+
+function entriesOf(value: unknown): Array<[string, unknown]> {
+  return isPlainObject(value) ? Object.entries(value) : [];
+}
+
+/**
+ * The own keys of a nested `_behaviors`/`_rift`/`_rift.fault` block, or `undefined` when the block is
+ * not a plain object and so has to be reported whole.
+ *
+ * Walking a non-object is the trap this exists to avoid: `Object.keys(Object(5))`,
+ * `Object.keys(Object(false))` and `Object.keys(new Map([['wait', 10]]))` are all `[]`, so a
+ * malformed block would contribute NOTHING to the dropped list and be served silently — the exact
+ * failure this guard exists to close, one level up. `_behaviors: cond && behaviours` degrading to
+ * `false` is the ordinary way to write that bug.
+ */
+function blockKeys(value: unknown): string[] | undefined {
+  return isPlainObject(value) ? Object.keys(value) : undefined;
+}
+
+/**
+ * Everything in one response object the engine's serve action would drop, named as the caller wrote it.
+ *
+ * Runs over the built `StubResponse` (`top` = true, where `_behaviors`/`_rift` are siblings of `is`)
+ * and over the `is` block itself (`top` = false, which is also the whole object on the raw-literal
+ * path, since `IsResponse` has an open index signature and a caller can put either block there).
+ *
+ * Collects rather than throwing at the first hit: first-wins would send a caller round the loop once
+ * per construct, each time reporting a rule they had already been told was unusable.
+ */
+function undeliverable(source: unknown, top: boolean): string[] {
+  const dropped: string[] = [];
+  for (const [key, value] of entriesOf(source)) {
+    // An explicitly-undefined property is dropped by `JSON.stringify` anyway, so it loses nothing and
+    // is treated as absent — reporting it would refuse an ordinary optional spread.
+    if (value === undefined) continue;
+    if (key === '_behaviors') {
+      const behaviors = blockKeys(value);
+      if (behaviors === undefined) dropped.push(named('_behaviors', undefined));
+      else for (const b of behaviors) dropped.push(named(`_behaviors.${b}`, BEHAVIOR_METHODS[b]));
+    } else if (key === '_rift') {
+      const extensions = blockKeys(value);
+      if (extensions === undefined) {
+        dropped.push(named('_rift', undefined));
+      } else {
+        for (const [ext, extValue] of Object.entries(value as Record<string, unknown>)) {
+          if (extValue === undefined) continue;
+          if (ext !== 'fault') {
+            dropped.push(named(`_rift.${ext}`, RIFT_METHODS[ext]));
+            continue;
+          }
+          const kinds = blockKeys(extValue);
+          if (kinds === undefined) dropped.push(named('_rift.fault', undefined));
+          else for (const kind of kinds) dropped.push(named(`_rift.fault.${kind}`, FAULT_METHODS[kind]));
+        }
+      }
+    } else if (top) {
+      // `is` is the only top-level key the serve path reads. Anything else can only have arrived
+      // through `raw()`, and `toServeStub` never looks at it. That includes a flat-form
+      // `statusCode`/`headers`/`body` (issue #304) patched alongside an `is` block; a raw() patch
+      // carrying ONLY the flat form builds no `is` at all and is refused earlier instead.
+      if (key !== 'is') dropped.push(named(key, 'raw()'));
+    } else if (!DELIVERABLE_IS_KEYS.has(key)) {
+      dropped.push(named(key, undefined));
+    }
+  }
+  return dropped;
+}
+
+/**
+ * A `ResponseBuilder` is only valid here when it builds a plain `is` block — proxy/inject/native-fault
+ * responses have no meaning as an intercept `serve` action — and only when nothing else on it would
+ * be silently discarded (issue #131).
+ *
+ * The engine genuinely cannot carry these: `ServeStub` in `crates/rift-http-proxy/src/intercept_rules.rs`
+ * is exactly `{status_code, headers, body}`, and none of its structs use `deny_unknown_fields`, so
+ * posting the extra fields would be accepted-and-ignored engine-side too. Refusing here is the only
+ * place the caller can still be told. The message matches rift-java's `InterceptImpl.requireDeliverable`
+ * and rift-scala's `FacadeEncode.requireDeliverable` so the three SDKs read identically.
+ */
 function toIsResponse(response: ResponseBuilder | IsResponse): IsResponse {
-  if (!(response instanceof ResponseBuilder)) return response;
-  const built = response.build();
-  if (built.is === undefined) {
+  const dropped: string[] = [];
+  let is: unknown;
+  if (response instanceof ResponseBuilder) {
+    const built = response.build();
+    if (built.is === undefined) {
+      throw new InvalidDefinition(
+        'intercept serve() response must build an `is` block (status/headers/body). A proxy, inject or ' +
+          'native-fault response is not a valid intercept action, and a raw() patch carrying only the ' +
+          'flat statusCode/headers/body form does not build one either.'
+      );
+    }
+    is = built.is;
+    dropped.push(...undeliverable(built, true), ...undeliverable(built.is, false));
+  } else {
+    is = response;
+    dropped.push(...undeliverable(response, false));
+  }
+  // Before the collected report, because a non-object carries no keys to have collected: without this
+  // a string response registered an empty `serve: {}` and a `null` one escaped as a raw `TypeError`
+  // from `toServeStub`, breaking serve()'s InvalidDefinition-only error contract (issue #101).
+  if (!isPlainObject(is)) {
     throw new InvalidDefinition(
-      'intercept serve() response must build an `is` block (status/headers/body) — proxy/inject/fault responses are not valid intercept actions'
+      `intercept serve() response must be an object with statusCode/headers/body, got ${
+        is === null ? 'null' : typeof is
+      }`
     );
   }
-  return built.is;
+  if (dropped.length > 0) {
+    throw new InvalidDefinition(
+      `intercept serve cannot deliver ${dropped.join(', ')} — the engine's serve action carries only ` +
+        `statusCode, headers and body, so the rule would be registered and then answer a response you ` +
+        `did not ask for. Use redirectTo(imposter) for full stub fidelity.`
+    );
+  }
+  return is;
 }
 
 function toForwardPort(to: ImposterHandle | number): number {

@@ -48,7 +48,49 @@ All notable changes to `@rift-vs/rift` are documented here. This project adheres
 
   Blank halves are refused on both doors under the same both-trim-dialect rule as the admin key.
 
+### Changed
+
+- **`intercept.serve()` refuses a response it cannot deliver, instead of quietly serving a different
+  one** (issue #131). The serve action was built from the response's `is` block alone, so the
+  `_behaviors` and `_rift` blocks beside it were discarded without a word: every behavior (`latency`,
+  `repeat`, `decorate`, `shellTransform`, `copy`, `lookup`) and every `_rift` extension (`templated`,
+  `script`, and the `latency`/`error`/`tcp` faults). Registration returned success either way, so a
+  fault-injection test could look green while asserting against a plain success response — certifying
+  resilience the system under test does not have.
+
+  The engine genuinely cannot carry these: its `ServeStub` is exactly `{status_code, headers, body}`,
+  and none of its structs use `deny_unknown_fields`, so sending the extra fields anyway would be
+  accepted-and-ignored engine-side with nothing to correlate against. Rejecting in the SDK is the
+  only place the caller can still be told. Unknown keys — at the top level, or inside `is` — are
+  refused for the same reason rather than dropped.
+
+  One error names **every** offending construct at once, with the DSL method that produced each one
+  (`` `_behaviors.wait` (latency()) ``), so a caller fixes them in a single pass instead of
+  discovering them one run at a time. Use `redirectTo(imposter)` or `forward()` when you need
+  behaviors, templating, scripts or faults: those reach a real imposter and so have full stub
+  fidelity. rift-java and rift-scala already refuse the same set with the same message.
+
+  **This is a behavior change**: `serve(host, ok('x').latency(10))` used to resolve and now throws
+  `InvalidDefinition`. Any call it now rejects was already not doing what it appeared to do.
+
 ### Fixed
+
+- **A `Map`, `Set` or other slot-backed container is refused instead of reaching the engine as `{}`**
+  (issue #126). `JSON.stringify` renders these as `{}` however much they hold, and the replacer only
+  inspected scalars, so the entire contents vanished onto the wire with nothing thrown SDK-side.
+  `new Set(hosts)` — a natural way to dedupe a predicate list — was the common way to hit it, and
+  `setFlowState`, which takes `unknown`, was the untyped path in.
+
+  Now refused with the usual typed `WireValidationError` and its JSONPath locator: `Map`, `Set`,
+  `WeakMap`, `WeakSet`, `RegExp`, `Promise`, `ArrayBuffer`, `SharedArrayBuffer` and `DataView`.
+
+  Deliberately still accepted, because they lose nothing or lose it visibly: an `Error` (its
+  enumerable own properties serialize), a typed-array view such as `Uint8Array` (an index-keyed
+  object), and an ordinary class instance whose state is private fields or getters. That last one is
+  why membership is an explicit list of built-ins rather than the rule "renders as `{}`" — such an
+  instance renders that way too, and refusing it would reject plain domain objects.
+
+  Same wrong-but-quiet class as issues #106/#118/#119, but losing every value rather than one.
 
 - **A refused value is located by a full JSONPath, not just its key** (issue #118).
   `WireValidationError.path` was already documented as "a JSONPath-ish locator of the offending

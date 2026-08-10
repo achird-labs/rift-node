@@ -649,7 +649,10 @@ Mountebank-shaped `IsResponse` the DSL builds — so `serve()` converts rather t
 | `body` string | sent verbatim, never double-encoded |
 | `body` absent or `null` | omitted |
 | `statusCode` numeric string (`'404'`) | coerced to a number |
-| `_mode: 'text'`, unknown keys | dropped |
+| `_mode: 'text'` | dropped — it is the engine's only mode, so removing it changes nothing served |
+| `_behaviors.*` (`latency`, `repeat`, `decorate`, `shellTransform`, `copy`, `lookup`, …) | **throws `InvalidDefinition`** naming each one — the serve action cannot run behaviors |
+| `_rift.*` (`templated`, `script`, `fault.latency`/`error`/`tcp`) | **throws `InvalidDefinition`** naming each one — the serve action carries no `_rift` extension |
+| any other unknown key | **throws `InvalidDefinition`** — it would otherwise be dropped in silence |
 | multi-value header (`string[]`) | **throws `InvalidDefinition`** — joining would corrupt `Set-Cookie` |
 | `_mode: 'binary'` or unrecognized | **throws `InvalidDefinition`** — the base64 would be served as literal text |
 | `statusCode` outside `100..999` | **throws `InvalidDefinition`** — the engine cannot render it as a status line |
@@ -662,6 +665,16 @@ outside `100..999`, or `addRule()` to send a rule verbatim. A non-finite number 
 all, so no escape hatch applies there — send it as a string if the SUT expects one. Body key order
 follows your object; the imposter path re-serializes through Rust and emits sorted keys, so the two
 differ byte-wise (equivalent JSON) if a SUT hashes the body.
+
+Behaviors and `_rift` extensions (issue #131) are rejected rather than dropped, and one error names
+**every** offending construct at once instead of making you discover them one run at a time. The
+reason they cannot be delivered is the engine's, not the SDK's: `ServeStub` carries only
+`statusCode`, `headers` and `body`, and its structs do not use `deny_unknown_fields`, so sending the
+extra fields anyway would be accepted-and-ignored engine-side with nothing to correlate against. This
+matters most for fault injection — a `withFault(...)` rule that registered and then answered a plain
+success would certify resilience the system under test does not have. Use `redirectTo(imposter)` (or
+`forward()`) when you need behaviors, templating, scripts or faults: those reach a real imposter and
+so have full stub fidelity. rift-java and rift-scala refuse the same set with the same message.
 
 The last two rows have no escape hatch: the engine strips those same four names on the `forward()`
 request and response legs as well, and a CR/LF-bearing header is unsendable in valid HTTP on any
