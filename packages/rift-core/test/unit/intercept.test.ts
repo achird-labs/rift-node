@@ -299,6 +299,20 @@ describe('issue #101 — serve() normalizes the response into the engine ServeSt
     );
   });
 
+  it('rejects a Map or Set body instead of serving it as {} (issue #126)', async () => {
+    await serveRejects({ body: new Set(['a', 'b']) as never });
+    await serveRejects({ body: { hosts: new Map([['a', 1]]) } as never });
+  });
+
+  it('names the built-in type when it rejects such a body (issue #126)', async () => {
+    const fake = new FakeInterceptBackend();
+    const { engine } = engineOf(fake);
+    const handle = await engine.intercept();
+    await expect(handle.serve('x.example.com', { body: { hosts: new Set(['a']) } as never })).rejects.toThrow(
+      /Set/
+    );
+  });
+
   it('passes a structured auth credential straight through to the engine (issue #124)', async () => {
     // The engine's InterceptStartOptions takes `auth: {username, password}` verbatim (camelCase,
     // deny_unknown_fields), so the option needs no transformation on the way out.

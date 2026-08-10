@@ -16,8 +16,18 @@
  * {@link WireValidationError} rather than being silently dropped, nulled, or leaked as a raw
  * `TypeError`. Its `path` locates the offending node as a JSONPath-like `$[2].action.serve.statusCode`,
  * so an element of a posted array does not have to be found by bisection (issue #118).
- * The check is `typeof`-based and so does not see through a boxed
+ * The scalar check is `typeof`-based and so does not see through a boxed
  * wrapper (`new Number(NaN)`) or a `Date`, both of which `WireModel` already excludes by type.
+ *
+ * The same applies to the CONTAINERS that keep their payload in internal slots `JSON.stringify`
+ * cannot reach — `Map`, `Set`, `WeakMap`, `WeakSet`, `RegExp`, `Promise`, `ArrayBuffer`,
+ * `SharedArrayBuffer` and `DataView` — which lose every value rather than one and so are refused
+ * too (issue #126). Two neighbours are deliberately NOT in that set, because they lose nothing or
+ * lose it visibly: an `Error`'s enumerable own properties do serialize (only the non-enumerable
+ * `message` and `stack` are lost), and a typed-array VIEW such as `Uint8Array` serializes as an
+ * index-keyed object. Note the set is an explicit list rather than the rule "renders as `{}`" —
+ * an ordinary class instance whose state is private fields or getters renders that way too, and
+ * refusing those would reject plain domain objects.
  */
 
 import { WireValidationError } from './fromJson.js';
@@ -26,6 +36,39 @@ import type { WireModel } from './types.js';
 /** Spellable as `.key`; anything else needs `["…"]`. Header names (`Content-Type`) are the common
  * case for the second branch. */
 const BARE_IDENTIFIER = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
+
+/**
+ * The name of the built-in `value` is an instance of, for the containers that keep their payload in
+ * internal slots `JSON.stringify` cannot reach — otherwise `undefined`.
+ *
+ * Membership is this explicit list of ECMAScript built-ins, and deliberately NOT the rule "anything
+ * that stringifies to `{}`". An ordinary class instance whose state is private fields or getters
+ * renders as `{}` too, so that rule would refuse the plain domain objects callers legitimately send.
+ * Web/host objects of the same shape (`Headers`, `URLSearchParams`) are left out for the converse
+ * reason: including them makes the set depend on which globals the runtime happens to provide.
+ *
+ * The name is the matched built-in's, not `value.constructor.name`: a subclass is refused for the
+ * same reason its base is, so it should read the same in the error, and `constructor` is not
+ * guaranteed to be present on a hand-built prototype chain.
+ *
+ * `instanceof` does not see across realms (a `Map` from a `vm` context), which is acceptable for a
+ * single-realm Node SDK — the alternative, `Object.prototype.toString`, is spoofable through
+ * `Symbol.toStringTag` and so trades a rare miss for a forgeable check.
+ */
+function slotBackedBuiltinName(value: object): string | undefined {
+  if (value instanceof Map) return 'Map';
+  if (value instanceof Set) return 'Set';
+  if (value instanceof WeakMap) return 'WeakMap';
+  if (value instanceof WeakSet) return 'WeakSet';
+  if (value instanceof RegExp) return 'RegExp';
+  if (value instanceof Promise) return 'Promise';
+  // Binary buffers. A typed-array VIEW (`Uint8Array`) is not here: it serializes as an index-keyed
+  // object, which is lossy but not empty, and is left to the caller to convert deliberately.
+  if (value instanceof ArrayBuffer) return 'ArrayBuffer';
+  if (value instanceof SharedArrayBuffer) return 'SharedArrayBuffer';
+  if (value instanceof DataView) return 'DataView';
+  return undefined;
+}
 
 /**
  * @internal Builds the replacer shared with the intercept `serve()` body path
@@ -67,6 +110,23 @@ export function makeJsonSafeReplacer(): (this: unknown, key: string, value: unkn
     // need. Returning here also keeps path building off the leaf path: it runs once per container
     // and once per throw, never for every scalar in the model.
     if (typeof value === 'object' && value !== null) {
+      // Checked before the ancestry record, because this container never gets walked: `JSON.stringify`
+      // enumerates own properties, and these types keep their contents somewhere it cannot see, so
+      // the whole collection would reach the engine as `{}`. That is the same wrong-but-quiet shape
+      // as the leaf guards below, one level up and losing every value rather than one (issue #126).
+      // `JSON.stringify` applies `toJSON` first, so what is judged here is always the value that will
+      // actually be serialized: a caller who declared how their type serializes is never pre-empted,
+      // and a `toJSON()` that itself RETURNS one of these is still caught.
+      const slotBacked = slotBackedBuiltinName(value);
+      if (slotBacked !== undefined) {
+        // "drop its contents" rather than "emit {}": a subclass carrying its own enumerable
+        // properties serializes them and loses only the slot-backed payload, so `{}` would be a
+        // literal claim that is false for exactly the values most likely to confuse a caller.
+        throw new WireValidationError(
+          `value of type ${slotBacked} is not JSON-serializable (JSON.stringify would silently drop its contents)`,
+          pathTo(this, key, isRoot)
+        );
+      }
       paths.set(value, pathTo(this, key, isRoot));
       return value;
     }

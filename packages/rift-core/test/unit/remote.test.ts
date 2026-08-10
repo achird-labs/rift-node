@@ -377,6 +377,11 @@ describe('issue #112 — outbound wire bodies are JSON-safe on every admin route
     await rejectsWithoutSending((c) => c.setFlowState(4545, 'flow', 'key', NaN));
   });
 
+  it('setFlowState refuses a Map or Set rather than storing {} (issue #126)', async () => {
+    await rejectsWithoutSending((c) => c.setFlowState(4545, 'flow', 'key', new Map([['a', 1]]) as never));
+    await rejectsWithoutSending((c) => c.setFlowState(4545, 'flow', 'key', new Set([1]) as never));
+  });
+
   it('refuses a bigint with a typed error rather than a raw TypeError', async () => {
     const fn = mockFetch(json({}));
     const c = connect(BASE);

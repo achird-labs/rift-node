@@ -266,7 +266,16 @@ outbound (issue #112) every admin payload — imposters, stubs, flow-state value
 options — is refused before it is sent if JSON cannot represent it honestly: a non-finite number
 (`JSON.stringify` would emit `null`), a `bigint`, a function, a symbol, or an `undefined` array
 *element* (nulled the same way — issue #119). An `undefined` object *property* is not an error: it is
-dropped, which is how an omitted optional stays off the wire. `.path` locates the offending node as a
+dropped, which is how an omitted optional stays off the wire. A container that keeps its payload
+where `JSON.stringify` cannot reach it — `Map`, `Set`, `WeakMap`, `WeakSet`, `RegExp`, `Promise`,
+`ArrayBuffer`, `SharedArrayBuffer`, `DataView` — is refused too (issue #126), because it would
+otherwise arrive as `{}` with every value gone: `new Set(hosts)`, a natural way to dedupe, is the
+common way to hit this. Pass an array or plain object instead (and for a pattern, `matches(/re/)`,
+which converts to the source string the engine expects). Two neighbours are deliberately *not*
+refused, because they lose nothing or lose it visibly: an `Error` (its enumerable own properties do
+serialize) and a typed-array view such as `Uint8Array` (an index-keyed object). Nor is an ordinary
+class instance whose state is private fields or getters, even though it also renders as `{}` — the
+refused set is an explicit list, not a rule about the output. `.path` locates the offending node as a
 JSONPath-like string — `$[2].action.serve.statusCode`, not a bare `statusCode` — so an element of a
 posted array is named by index instead of having to be bisected by hand (issue #118). Array indices
 are `[2]`, identifier-safe keys are `.name`, and anything else is quoted (`$.headers["Content-Type"]`).
@@ -658,7 +667,9 @@ The last two rows have no escape hatch: the engine strips those same four names 
 request and response legs as well, and a CR/LF-bearing header is unsendable in valid HTTP on any
 path. `addRule()` is not a way around them either — it skips the normalization above, so the engine
 drops the header silently just as it did before. What `addRule()` does *not* skip is JSON
-representability: a rule carrying a non-finite number, a `bigint`, a function or a symbol —
+representability: a rule carrying a non-finite number, a `bigint`, a function, a symbol, or one of
+the slot-backed containers above (`Map`, `Set`, `WeakMap`, `WeakSet`, `RegExp`, `Promise`,
+`ArrayBuffer`, `SharedArrayBuffer`, `DataView`) —
 anywhere, including `statusCode` and `predicates` — throws `InvalidDefinition` rather than reaching
 the engine as a `null` you never wrote (a `null` the transport could not catch afterwards, since it
 re-parses the serialized rule). It still does not range-check a finite `statusCode`. Note the four
