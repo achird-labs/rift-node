@@ -95,6 +95,49 @@ describe('DSL #23 — latency variants (never {inject})', () => {
 });
 
 describe('DSL #23 — binary body, multi-value headers, templated', () => {
+  it('latency(number) refuses a non-integer or negative delay (issue #146)', () => {
+    // Engine 0.18.0 fails the config for anything but a non-negative integer (rift#1162); before,
+    // the block was dropped silently.
+    for (const ms of [1.5, -1, NaN, Infinity]) {
+      expect(() => ok().latency(ms)).toThrow(InvalidDefinition);
+      expect(() => ok().latency(ms)).toThrow(/latency\(/);
+    }
+    expect(ok().latency(0).build()._behaviors).toEqual({ wait: 0 });
+    // -0 is an integer >= 0 and serializes as 0; refusing it would be a false positive.
+    expect(JSON.stringify(ok().latency(-0).build()._behaviors)).toBe('{"wait":0}');
+  });
+
+  it('latency({min,max}) refuses inverted, negative or fractional bounds (issue #146)', () => {
+    // `min > max` is refused by the engine since rift#1148; before, every connection was dropped.
+    for (const range of [{ min: 6, max: 5 }, { min: -1, max: 5 }, { min: 1.5, max: 5 }, { min: 1, max: NaN }]) {
+      expect(() => ok().latency(range)).toThrow(InvalidDefinition);
+      expect(() => ok().latency(range)).toThrow(/latency\(/);
+    }
+    expect(ok().latency({ min: 5, max: 5 }).build()._behaviors).toEqual({ wait: { min: 5, max: 5 } });
+    expect(ok().latency({ min: 0, max: 0 }).build()._behaviors).toEqual({ wait: { min: 0, max: 0 } });
+  });
+
+  it('repeat(n) refuses 0, negatives and fractions (issue #146)', () => {
+    for (const n of [0, -2, 1.5, NaN, 0x1_0000_0000]) {
+      expect(() => ok().repeat(n)).toThrow(InvalidDefinition);
+      expect(() => ok().repeat(n)).toThrow(/repeat\(/);
+    }
+    expect(ok().repeat(1).build()._behaviors).toEqual({ repeat: 1 });
+  });
+
+  it('binaryBody(string) refuses non-canonical base64 (issue #146)', () => {
+    // Node's Buffer.from(s, 'base64') is lenient, and the engine is not: a body it cannot decode is
+    // served with `x-rift-binary-error: true` (500 under strictBehaviors) since rift#1151.
+    // 'AR==' and 'AQJ=' have non-zero trailing bits: Buffer decodes them, the engine's STANDARD does not.
+    for (const s of ['AQI', 'AQID\n', 'AQ ID', 'AQ_D', 'AQ-D', 'A===', 'AQID=', '====', 'AR==', 'AQJ=']) {
+      expect(() => ok().binaryBody(s)).toThrow(InvalidDefinition);
+      expect(() => ok().binaryBody(s)).toThrow(/binaryBody\(/);
+    }
+    for (const s of ['AQID', 'AQ==', 'AQI=', '']) {
+      expect(ok().binaryBody(s).build().is).toEqual({ statusCode: 200, body: s, _mode: 'binary' });
+    }
+  });
+
   it('binaryBody(Uint8Array) base64-encodes and marks _mode binary', () => {
     const r = ok().binaryBody(new Uint8Array([1, 2, 3, 255])).build();
     expect(r.is?.body).toBe(Buffer.from([1, 2, 3, 255]).toString('base64'));

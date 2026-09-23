@@ -411,12 +411,15 @@ interface ResponseBuilder /* R */ {
   header(name: string, value: string | string[]): this;  // string[] = multi-value (Set-Cookie)
   headers(h: Record<string, string | string[]>): this;
   body(v: JsonValue): this;
-  binaryBody(data: Uint8Array | string): this;           // base64-encodes; wire: _mode: "binary"
+  binaryBody(data: Uint8Array | string): this;           // base64-encodes; wire: _mode: "binary";
+                                                         // a string must be canonical base64 (throws otherwise)
   templated(): this;                                     // wire: _rift.templated: true
 
   // behaviors (_behaviors) — execution order in-engine: copy → lookup → decorate → wait
   latency(ms: number | { min: number; max: number } | string): this;
       // number → wait: N; range → wait: {min,max}; string = JS fn source → wait: "function() {...}"
+      // number: non-negative integer; range: 0 <= min <= max — anything else throws InvalidDefinition
+      // (the engine refuses it at the config door since 0.18.0). repeat(n): positive integer.
       // NEVER emit {"inject": ...} — docs show it but the engine's WaitBehavior parser rejects it
   repeat(n: number): this;
   decorate(jsFn: string): this;
