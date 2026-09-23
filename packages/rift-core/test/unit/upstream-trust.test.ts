@@ -15,6 +15,8 @@ import {
 import { InvalidDefinition } from '../../src/errors.js';
 
 const PEM = '-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n';
+// Already absolute on every platform (`/etc/...` is relative to the drive on Windows).
+const ABS = path.resolve('corp-ca.pem');
 
 describe('issue #136 — upstreamTrust translation', () => {
   it('pins the engine floor for the spawn gate', () => {
@@ -22,7 +24,7 @@ describe('issue #136 — upstreamTrust translation', () => {
   });
 
   it('serve options: exactly one key per variant, the file made absolute', () => {
-    expect(upstreamTrustServeOptions({ caFile: '/etc/ssl/corp-ca.pem' })).toEqual({ upstreamCaFile: '/etc/ssl/corp-ca.pem' });
+    expect(upstreamTrustServeOptions({ caFile: ABS })).toEqual({ upstreamCaFile: ABS });
     expect(upstreamTrustServeOptions({ caFile: 'certs/ca.pem' })).toEqual({
       upstreamCaFile: path.resolve('certs/ca.pem'),
     });
@@ -37,7 +39,7 @@ describe('issue #136 — upstreamTrust translation', () => {
   });
 
   it('spawn args: caFile and skipVerify have CLI flags, caPem does not', () => {
-    expect(upstreamTrustSpawnArgs({ caFile: '/etc/ssl/corp-ca.pem' })).toEqual(['--upstream-ca-file', '/etc/ssl/corp-ca.pem']);
+    expect(upstreamTrustSpawnArgs({ caFile: ABS })).toEqual(['--upstream-ca-file', ABS]);
     expect(upstreamTrustSpawnArgs({ caFile: 'certs/ca.pem' })).toEqual(['--upstream-ca-file', path.resolve('certs/ca.pem')]);
     expect(upstreamTrustSpawnArgs({ skipVerify: true })).toEqual(['--upstream-tls-skip-verify']);
     expect(() => upstreamTrustSpawnArgs({ caPem: PEM })).toThrow(InvalidDefinition);

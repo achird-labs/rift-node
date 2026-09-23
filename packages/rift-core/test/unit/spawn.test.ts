@@ -45,9 +45,9 @@ describe('issue #136 — upstreamTrust on the spawn transport', () => {
   }
 
   it('renders --upstream-ca-file (absolute) and --upstream-tls-skip-verify; nothing when unset', () => {
-    expect(buildSpawnArgs(2525, { upstreamTrust: { caFile: '/etc/ssl/corp-ca.pem' } })).toEqual([
-      '--port', '2525', '--upstream-ca-file', '/etc/ssl/corp-ca.pem',
-    ]);
+    // Already absolute on every platform (`/etc/...` is relative to the drive on Windows).
+    const abs = path.resolve('corp-ca.pem');
+    expect(buildSpawnArgs(2525, { upstreamTrust: { caFile: abs } })).toEqual(['--port', '2525', '--upstream-ca-file', abs]);
     expect(buildSpawnArgs(2525, { upstreamTrust: { caFile: 'certs/ca.pem' } })).toEqual([
       '--port', '2525', '--upstream-ca-file', path.resolve('certs/ca.pem'),
     ]);
