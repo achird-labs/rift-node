@@ -102,7 +102,25 @@ raw `wire.Predicate` as an escape hatch.
 | `_behaviors: { lookup: [{ key, fromDataSource, into }] }` | `.lookup({ key, fromDataSource, into })` (or an array) |
 | Any other `_behaviors` key | `.behavior({ ...raw })` — shallow-merge escape hatch |
 
-Execution order in-engine: `copy` → `lookup` → `decorate` → `wait`.
+Execution order in-engine (Rift ≥ 0.18.0, matching Mountebank): `wait` → `lookup` → `copy` →
+`shellTransform` → `decorate`. Rift ≤ 0.17.0 ran `wait` → `copy` → `lookup` → `decorate` →
+`shellTransform`. The SDK always emits the object form; a caller who needs a different order must
+send the engine's `behaviors` array form **alone** — `.raw({ behaviors: [...] })` on a response
+with no `_behaviors`, since the engine uses `_behaviors` and ignores the array when both are
+present.
+
+### Behavior changes in Rift 0.18.0
+
+Two combinations the builder can express change behavior with the new order (rift#1202):
+
+- `.decorate(...)` + `.shellTransform(...)` on one response: the shell transform now runs
+  **before** the decorator, so the decorator sees the transformed response (it used to run last).
+- `.copy(...)` + `.lookup(...)` on one response: the lookup now runs **before** the copy, so
+  request text inserted by `copy` is no longer re-scanned for lookup tokens — which also closes a
+  column-disclosure path.
+
+If a `decorate` or `lookup` result changed after moving to engine 0.18.0, this is the cause; the
+`behaviors` array form above restores an explicit order.
 
 ## Faults
 

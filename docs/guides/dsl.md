@@ -173,7 +173,14 @@ ok().lookup({ key: { from: 'path', using: {...} }, fromDataSource: { csv: { path
 ok().behavior({ /* raw _behaviors escape hatch */ })
 ```
 
-Execution order in-engine: **copy → lookup → decorate → wait**. `.latency()` never emits the
+Execution order in-engine (Rift ≥ 0.18.0, Mountebank's order): **wait → lookup → copy →
+shellTransform → decorate**; Rift ≤ 0.17.0 ran wait → copy → lookup → decorate → shellTransform
+(see [Migrating from Mountebank §Behavior changes in Rift 0.18.0](../mountebank/migration.md#behavior-changes-in-rift-0180)).
+The builder always emits the object form, which the engine runs in that fixed order; a caller who
+needs a different order sends the engine's `behaviors` array form alone —
+`.raw({ behaviors: [{ decorate: 'function(req,res){...}' }, { shellTransform: 'cmd' }] })` on a response with no other behavior
+calls, because the engine uses `_behaviors` and ignores the array when both are present.
+`.latency()` never emits the
 Mountebank `wait: { inject: ... }` random-delay form — the engine's `WaitBehavior` parser only
 accepts a fixed number, a `{min,max}` range, or a JS function-source string; use the `{min,max}`
 form for a random range. A fractional or negative delay, an inverted range, a negative or fractional

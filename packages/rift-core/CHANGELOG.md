@@ -145,6 +145,14 @@ All notable changes to `@rift-vs/rift` are documented here. This project adheres
 
 ### Changed
 
+- **Docs: the object-form `_behaviors` execution order is Mountebank's since engine 0.18.0** —
+  wait → lookup → copy → shellTransform → decorate (rift#1202; issue #140). The guides said
+  "copy → lookup → decorate → wait", which was wrong for every engine. The migration guide names
+  the two builder combinations whose result changes (`decorate` + `shellTransform`: the transform
+  now runs first; `copy` + `lookup`: the lookup now runs first and copied text is not re-scanned)
+  and the array-form escape hatch, which the engine honours only when no `_behaviors` block is
+  sent alongside it.
+
 - **`intercept.serve()` refuses a response it cannot deliver, instead of quietly serving a different
   one** (issue #131). The serve action was built from the response's `is` block alone, so the
   `_behaviors` and `_rift` blocks beside it were discarded without a word: every behavior (`latency`,
