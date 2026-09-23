@@ -34,7 +34,7 @@ reference) for completeness.
 | `{ protocol: 'https', cert, key, mutualAuth: true }` | `imposter().https({ cert, key }).requireClientCertificate()` — requires a client certificate on engine ≥ 0.18.0 (older engines accepted everyone; `create()` refuses below 0.18.0) |
 | `{ protocol: 'https', mutualAuth: true, rejectUnauthorized: true, ca }` | `imposter().https(...).requireClientCertificate([caPem])` — one anchor emits `ca` as a string, several as an array; `listImposters({ replayable: true })` carries the CA material; the per-imposter `toJson()` omits it like `cert`/`key` |
 | `{ recordRequests: true }` | `imposter().record()` |
-| `{ recordMatches: true }` | `imposter().recordMatches()` |
+| `{ recordMatches: true }` | `imposter().recordMatches()` — **deprecated**: no Rift engine records per-stub matches (engine ≥ 0.18.0 reports `config_key_ignored`); use `record()` and `recorded()` |
 | `{ allowCORS: true }` | `imposter().allowCORS()` |
 | `{ defaultResponse: { statusCode: 404 } }` | `imposter().defaultResponse(status(404))` |
 | `{ name: 'users' }` | `imposter('users')` |
@@ -134,7 +134,7 @@ coexist; a second fault of the *same* kind throws rather than silently overwriti
 | `{ proxy: { addDecorateBehavior: 'fn' } }` | `.addDecorateBehavior('fn')` |
 | `{ proxy: { injectHeaders: { 'X-Foo': 'bar' } } }` | `.injectHeader('X-Foo', 'bar')` (one entry per name, case-insensitive; a second spelling throws) |
 | Rift extension: `{ proxy: { pathRewrite: { from, to } } }` | `.rewritePath(from, to)` |
-| `{ proxy: { key, cert } }` (mTLS to upstream) | `.clientCert({ key, cert })` |
+| `{ proxy: { key, cert } }` (mTLS to upstream) | `.clientCert({ key, cert })` — **deprecated**: Rift's proxy sends no client certificate; the keys are dropped on parse, no replacement |
 | `proxyTo(...).latency(500)` | Same call — behaviors are legal on a proxy response (the pre-DSL bridge silently dropped these; the current builder doesn't) |
 
 ## Scripts (`inject` → `_rift.script`)

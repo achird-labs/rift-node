@@ -136,6 +136,19 @@ describe('wire model — _rift.stateOps (issue #149)', () => {
   });
 });
 
+describe('wire model — keys no engine acts on still round-trip (issue #139)', () => {
+  it('preserves recordMatches, _rift.metrics and proxy key/cert without any deprecated builder', () => {
+    const imposter: Imposter = {
+      port: 4548,
+      protocol: 'http',
+      recordMatches: true,
+      _rift: { metrics: { enabled: true, port: 9091 } },
+      stubs: [{ responses: [{ proxy: { to: 'http://u', key: '-----BEGIN KEY-----', cert: '-----BEGIN CERT-----' } }] }],
+    };
+    expect(toWireJson(fromJson(imposter))).toEqual(imposter);
+  });
+});
+
 describe('wire model — HTTPS client-auth keys (issue #137)', () => {
   it('round-trips both ca spellings byte-exact and types them', () => {
     const one = { port: 4443, protocol: 'https', mutualAuth: true, rejectUnauthorized: true, ca: 'PEM-A', stubs: [] };

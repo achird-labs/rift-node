@@ -34,15 +34,15 @@ imposter('users')
                                           // no argument = any client cert; older engines accept everyone,
                                           // so create() refuses below 0.18.0
   .record()          // recordRequests — required for verify()/recorded() to see anything
-  .recordMatches()   // recordMatches — predicate-match diagnostics
   .allowCORS()
   .defaultResponse(status(404, { error: 'no matching stub' }));
 ```
 
 - `.record()` turns on the request journal that [verification](verification.md) reads from —
   without it, `verify()`/`recorded()` throw naming `.record()` as the fix.
-- `.recordMatches()` is a separate diagnostic flag (which predicates matched/didn't on each
-  request), independent of `.record()`.
+- `.recordMatches()` is **deprecated**: no Rift engine records per-stub matches. Engine ≥ 0.18.0
+  reports the key as `config_key_ignored` in the imposter's `_rift.warnings` (and logs a WARN);
+  older engines ignore it silently. `.record()` is the flag that does something.
 - `.defaultResponse(...)` accepts a `ResponseBuilder` or a raw `IsResponse`; it must be an `is`
   response (no proxy/inject/fault) — `imposter().defaultResponse(...)` throws
   `InvalidDefinition` otherwise.
@@ -198,7 +198,7 @@ proxyTo('http://upstream').proxyOnce()           // record once, replay thereaft
 ```
 
 Both have a much larger surface (all four native TCP fault kinds, `proxyAlways`/
-`proxyTransparent`, header injection, path rewriting, mTLS to upstream, and how behaviors compose
+`proxyTransparent`, header injection, path rewriting, and how behaviors compose
 onto a proxy response) — see [Migrating from Mountebank §Faults](../mountebank/migration.md#faults)
 and [§Proxy](../mountebank/migration.md#proxy) for the complete mapping.
 

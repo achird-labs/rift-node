@@ -75,7 +75,15 @@ export class ProxyBuilder extends ResponseBuilder {
     return this.patch({ pathRewrite: { from, to } });
   }
 
-  /** Sets the mutual-TLS `key`/`cert` PEM pair inside `proxy`. */
+  /**
+   * Sets a `key`/`cert` PEM pair inside `proxy`, which no Rift engine acts on: the engine's proxy
+   * client sends no client certificate, and its `ProxyResponse` has no such fields — the keys are
+   * dropped on parse without even a `config_key_ignored` warning (checked against 0.18.0). The
+   * response is still created. The keys stay in the model for parse fidelity.
+   *
+   * @deprecated Has no effect, and there is no replacement: Rift's proxy does not present a client
+   * certificate to the upstream. `upstreamTrust` covers the other direction (trusting the upstream).
+   */
   clientCert(cert: { key: string; cert: string }): this {
     return this.patch({ key: cert.key, cert: cert.cert });
   }

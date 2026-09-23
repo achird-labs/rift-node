@@ -168,6 +168,18 @@ All notable changes to `@rift-vs/rift` are documented here. This project adheres
   **This is a behavior change**: `serve(host, ok('x').latency(10))` used to resolve and now throws
   `InvalidDefinition`. Any call it now rejects was already not doing what it appeared to do.
 
+### Deprecated
+
+- **`imposter().recordMatches()`, `imposter().metrics(port?)` and `proxyTo().clientCert()`** (issue
+  #139): the keys they emit are ones no Rift engine acts on. Engine 0.18.0 reports `recordMatches`
+  and `_rift.metrics` as `config_key_ignored` entries in the imposter's `_rift.warnings` and logs a
+  WARN at load (rift#1152); a proxy `key`/`cert` is dropped on parse without even that. Each builder
+  now carries a `@deprecated` JSDoc naming the alternative — `record()` for the request journal,
+  `SpawnOptions.metricsPort` for the process-wide scrape, nothing for `clientCert` (Rift's proxy
+  sends no client certificate). Nothing changes at runtime: no warning, no removal, the wire output
+  is byte-identical and the model keeps the keys for parse fidelity. The docs that described the
+  three as functional are corrected.
+
 ### Fixed
 
 - **`rift.connect()` failed against every real engine under the default `versionCheck: 'fail'`**
