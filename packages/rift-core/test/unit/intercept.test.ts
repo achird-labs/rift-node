@@ -18,7 +18,7 @@ import path from 'path';
 import { Engine, type AdminApi, type ImposterHandle } from '../../src/engine.js';
 import { ok, okJson, created, req } from '../../src/dsl/index.js';
 import type { ResponseBuilder } from '../../src/dsl/response.js';
-import { InterceptUnavailable, InvalidDefinition, WireValidationError } from '../../src/errors.js';
+import { InterceptUnavailable, InvalidDefinition, WireValidationError, ImposterNotFound } from '../../src/errors.js';
 import type { InterceptRule, IsResponse, JsonValue, ServeStub } from '../../src/model/index.js';
 import type { InterceptBackend } from '../../src/intercept/types.js';
 import { buildSpawnArgs } from '../../src/spawn/index.js';
@@ -569,7 +569,7 @@ describe('issue #101 — serve() normalizes the response into the engine ServeSt
   it('refuses auth on the spawn and remote transports rather than dropping it (issue #124)', async () => {
     // Only the embedded backend actually starts a listener from these options. On spawn/remote,
     // RemoteInterceptBackend.startIntercept reads host+port off the JSON and discards the rest —
-    // there is no runtime start endpoint yet (rift#493) — so accepting `auth` here would hand back a
+    // attach-only by design (issue #129) — so accepting `auth` here would hand back a
     // handle to an UNAUTHENTICATED MITM proxy while the caller believed it was guarded.
     for (const transport of ['spawn', 'remote'] as const) {
       const engine = new Engine(noopAdmin('http://127.0.0.1:2525'), transport, {
@@ -581,7 +581,44 @@ describe('issue #101 — serve() normalizes the response into the engine ServeSt
       expect(err).toBeInstanceOf(InterceptUnavailable);
       // The message has to name the door that does work, or the caller is simply stuck.
       expect((err as Error).message).toMatch(/rift\.spawn/);
+      // The engine has had POST /intercept since v0.13.0; the reason is attach-only by design.
+      expect((err as Error).message).not.toMatch(/493/);
     }
+  });
+
+  it('refuses caCertPath/caKeyPath on spawn and remote, naming both and the spawn door (issue #129)', async () => {
+    // A CA the engine never receives is the silent failure this issue was filed for: the handle
+    // would look configured while traffic is signed by whatever CA the listener was started with.
+    for (const transport of ['spawn', 'remote'] as const) {
+      const engine = new Engine(noopAdmin('http://127.0.0.1:2525'), transport, {
+        ...(transport === 'spawn' ? { interceptSpawn: { host: '127.0.0.1', port: 6800 } } : {}),
+      });
+      const err = await engine.intercept({ caCertPath: '/ca.pem', caKeyPath: '/ca.key' }).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(InterceptUnavailable);
+      expect((err as Error).message).toMatch(/caCertPath\/caKeyPath/);
+      expect((err as Error).message).toMatch(/rift\.spawn\(\{ intercept: \{ caCertPath, caKeyPath, auth \} \}\)/);
+      expect((err as Error).message).toMatch(/rift\.embedded\(\)/);
+    }
+  });
+
+  it('refuses auth and the CA pair together with ONE error naming all of them (issue #129)', async () => {
+    for (const transport of ['spawn', 'remote'] as const) {
+      const engine = new Engine(noopAdmin('http://127.0.0.1:2525'), transport, {
+        ...(transport === 'spawn' ? { interceptSpawn: { host: '127.0.0.1', port: 6800 } } : {}),
+      });
+      const err = await engine
+        .intercept({ auth: { username: 'u', password: 'p' }, caCertPath: '/ca.pem', caKeyPath: '/ca.key' })
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(InterceptUnavailable);
+      expect((err as Error).message).toMatch(/auth and caCertPath\/caKeyPath/);
+    }
+  });
+
+  it('embedded still forwards caCertPath/caKeyPath verbatim (issue #129)', async () => {
+    const fake = new FakeInterceptBackend();
+    const { engine } = engineOf(fake);
+    await engine.intercept({ caCertPath: '/ca.pem', caKeyPath: '/ca.key', auth: { username: 'u', password: 'p' } });
+    expect(JSON.parse(fake.startCalls[0] ?? '{}')).toMatchObject({ caCertPath: '/ca.pem', caKeyPath: '/ca.key' });
   });
 
   it('allows a colon in the username on the runtime door (issue #124)', async () => {
@@ -1041,41 +1078,64 @@ describe('issue #11 — remote transport: attach-only probe', () => {
     return fn as unknown as jest.Mock;
   }
 
-  it('404 on GET /intercept/rules → InterceptUnavailable("the Rift server must be started with --intercept-port")', async () => {
-    mockFetch(new Response(JSON.stringify({ errors: [{ message: 'not found' }] }), { status: 404 }));
+  const status404 = () =>
+    new Response(JSON.stringify({ errors: [{ message: 'intercept listener not running' }] }), { status: 404 });
+
+  it('no port: GET /intercept 404 → InterceptUnavailable("the Rift server must be started with --intercept-port"), nothing else called', async () => {
+    const fn = mockFetch(status404());
     const engine = new Engine(connect('http://localhost:2525'), 'remote', {});
     await expect(engine.intercept()).rejects.toThrow(InterceptUnavailable);
-    mockFetch(new Response(JSON.stringify({ errors: [{ message: 'not found' }] }), { status: 404 }));
+    mockFetch(status404());
     await expect(engine.intercept()).rejects.toThrow('the Rift server must be started with --intercept-port');
+    expect(fn).toHaveBeenCalledTimes(1);
+    expect((fn.mock.calls[0] as [string])[0]).toBe('http://localhost:2525/intercept');
   });
 
-  it('admin URL with no explicit port → InterceptUnavailable (no silent :0), unless a port is passed', async () => {
-    mockFetch(new Response('[]', { status: 200 }));
-    const engine = new Engine(connect('https://api.example.com'), 'remote', {});
-    await expect(engine.intercept()).rejects.toThrow(InterceptUnavailable);
-    mockFetch(new Response('[]', { status: 200 }));
-    await expect(engine.intercept()).rejects.toThrow('needs an explicit port');
-    // ...but an explicit port makes it attachable.
-    mockFetch(new Response('[]', { status: 200 }));
-    const engine2 = new Engine(connect('https://api.example.com'), 'remote', {});
-    const handle = await engine2.intercept({ port: 8443 });
-    expect(handle.port).toBe(8443);
-  });
-
-  it('200 on GET /intercept/rules → attaches (defaults the port to the admin port)', async () => {
-    mockFetch(new Response('[]', { status: 200 }));
+  it('no port: GET /intercept resolves the listener port; the handle uses the admin hostname, not the engine bind address (issue #129)', async () => {
+    // The intercept listener never shares the admin port, so the old admin-port default was always
+    // wrong. `GET /intercept` has reported the real port since engine v0.13.0; its `interceptUrl`
+    // is the BIND address (0.0.0.0 here), which is not what a SUT can dial.
+    const fn = mockFetch(new Response(JSON.stringify({ interceptPort: 8443, interceptUrl: 'http://0.0.0.0:8443' }), { status: 200 }));
     const engine = new Engine(connect('http://localhost:2525'), 'remote', {});
     const handle = await engine.intercept();
-    expect(handle.port).toBe(2525);
-    expect(handle.url).toBe('http://localhost:2525');
+    expect(handle.port).toBe(8443);
+    expect(handle.url).toBe('http://localhost:8443');
+    expect(fn).toHaveBeenCalledTimes(1);
   });
 
-  it('an explicit options.port overrides the admin-port fallback', async () => {
-    mockFetch(new Response('[]', { status: 200 }));
+  it('no port on an IPv6 admin URL: the handle stays bracketed (issue #129)', async () => {
+    mockFetch(new Response(JSON.stringify({ interceptPort: 8443, interceptUrl: 'http://[::]:8443' }), { status: 200 }));
+    const engine = new Engine(connect('http://[::1]:2525'), 'remote', {});
+    expect((await engine.intercept()).url).toBe('http://[::1]:8443');
+  });
+
+  it('no port: a malformed GET /intercept body is refused rather than attached (issue #129)', async () => {
+    mockFetch(new Response('{}', { status: 200 }));
+    const engine = new Engine(connect('http://localhost:2525'), 'remote', {});
+    await expect(engine.intercept()).rejects.toThrow(/unexpected shape/);
+  });
+
+  it('no port and no admin port in the URL: GET /intercept still answers the port (issue #129)', async () => {
+    mockFetch(new Response(JSON.stringify({ interceptPort: 8443, interceptUrl: 'http://0.0.0.0:8443' }), { status: 200 }));
+    const engine = new Engine(connect('https://api.example.com'), 'remote', {});
+    const handle = await engine.intercept();
+    expect(handle.url).toBe('http://api.example.com:8443');
+  });
+
+  it('explicit port: probes GET /intercept/rules only — the engine < 0.13.0 path — and attaches there (issue #129)', async () => {
+    const fn = mockFetch(new Response('[]', { status: 200 }));
     const engine = new Engine(connect('http://localhost:2525'), 'remote', {});
     const handle = await engine.intercept({ port: 9999 });
     expect(handle.port).toBe(9999);
     expect(handle.url).toBe('http://localhost:9999');
+    expect(fn).toHaveBeenCalledTimes(1);
+    expect((fn.mock.calls[0] as [string])[0]).toBe('http://localhost:2525/intercept/rules');
+  });
+
+  it('explicit port: 404 on the rules probe → InterceptUnavailable', async () => {
+    mockFetch(new Response(JSON.stringify({ errors: [{ message: 'not found' }] }), { status: 404 }));
+    const engine = new Engine(connect('http://localhost:2525'), 'remote', {});
+    await expect(engine.intercept({ port: 9999 })).rejects.toThrow('the Rift server must be started with --intercept-port');
   });
 });
 
@@ -1116,6 +1176,25 @@ describe('issue #11 — RemoteClient intercept HTTP routes (mocked fetch)', () =
     const raw = await connect(BASE).interceptListRules();
     expect(JSON.parse(raw)).toEqual([rule]);
     expect(lastCall(fn)).toMatchObject({ method: 'GET', url: `${BASE}/intercept/rules` });
+  });
+
+  it('interceptStatus → GET /intercept, returns {interceptPort, interceptUrl} (issue #129)', async () => {
+    const fn = mockFetch(new Response(JSON.stringify({ interceptPort: 8443, interceptUrl: 'http://0.0.0.0:8443' }), { status: 200 }));
+    const status = await connect(BASE).interceptStatus();
+    expect(status).toEqual({ interceptPort: 8443, interceptUrl: 'http://0.0.0.0:8443' });
+    expect(lastCall(fn)).toMatchObject({ method: 'GET', url: `${BASE}/intercept` });
+  });
+
+  it('interceptStatus refuses a 200 body without a numeric interceptPort — never a handle at :undefined (issue #129)', async () => {
+    for (const body of [{}, { interceptPort: '8443', interceptUrl: 'http://0.0.0.0:8443' }, { interceptPort: 8443 }]) {
+      mockFetch(new Response(JSON.stringify(body), { status: 200 }));
+      await expect(connect(BASE).interceptStatus()).rejects.toThrow(/unexpected shape/);
+    }
+  });
+
+  it('interceptStatus → 404 (listener not running) maps through the generic 404 path (issue #129)', async () => {
+    mockFetch(new Response(JSON.stringify({ errors: [{ message: 'intercept listener not running' }] }), { status: 404 }));
+    await expect(connect(BASE).interceptStatus()).rejects.toThrow(ImposterNotFound);
   });
 
   it('interceptClearRules → DELETE /intercept/rules', async () => {

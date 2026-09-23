@@ -280,6 +280,24 @@ export class RemoteClient implements AdminApi {
     return JSON.stringify(rules);
   }
 
+  /** `GET /intercept` (engine >= 0.13.0): the running listener's port and bind URL. A 404 — the
+   * listener is not running, or the engine predates the route — maps to `ImposterNotFound` like
+   * every other 404 here; `engine.ts` turns it into the `--intercept-port` guidance. `caCertPem`/
+   * `caKeyPem` never appear on GET and are not modelled. */
+  async interceptStatus(): Promise<{ interceptPort: number; interceptUrl: string }> {
+    const raw = await this.request<Record<string, unknown>>('/intercept', { method: 'GET' });
+    const interceptPort = raw['interceptPort'];
+    const interceptUrl = raw['interceptUrl'];
+    // The embedded backend checks the same shape from `rift_start_intercept`; without this a body
+    // missing the port would become a handle at `http://host:undefined` with no probe to catch it.
+    if (typeof interceptPort !== 'number' || !Number.isFinite(interceptPort) || typeof interceptUrl !== 'string') {
+      throw new RiftError(
+        `GET /intercept returned an unexpected shape (expected {interceptPort, interceptUrl}): ${JSON.stringify(raw)}`
+      );
+    }
+    return { interceptPort, interceptUrl };
+  }
+
   async interceptClearRules(): Promise<void> {
     await this.request('/intercept/rules', { method: 'DELETE', allowEmpty: true });
   }

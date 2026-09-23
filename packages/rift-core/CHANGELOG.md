@@ -49,10 +49,11 @@ All notable changes to `@rift-vs/rift` are documented here. This project adheres
   `auth` is `{ username, password }` — the shape the engine's own `InterceptStartOptions.auth` takes,
   so it needs no transformation. It is honoured by the doors that actually START a listener:
   `rift.spawn({ intercept: { auth } })`, and `engine.intercept({ auth })` on the **embedded**
-  transport. On spawn/remote, `engine.intercept()` only *attaches* to a listener the engine already
-  brought up, and there is no runtime endpoint to hand a running listener a credential (rift#493) —
-  so `auth` there throws `InterceptUnavailable` naming `rift.spawn()` instead of being accepted and
-  silently discarded, which would hand back a handle to an unauthenticated proxy.
+  transport. On spawn/remote, `engine.intercept()` only *attaches* to a listener the engine's
+  operator already brought up — so `auth` there throws `InterceptUnavailable` naming `rift.spawn()`
+  instead of being accepted and silently discarded, which would hand back a handle to an
+  unauthenticated proxy. (The reason given at the time, "no runtime endpoint (rift#493)", was
+  stale; issue #129 below states the real one and extends the guard to the CA paths.)
 
   An explicit option beats the ambient variable, mirroring `apiKey` / `MB_APIKEY`; when it is set the
   ambient value is never passed to the child, so a malformed ambient value no longer fails a spawn
@@ -106,6 +107,28 @@ All notable changes to `@rift-vs/rift` are documented here. This project adheres
   `InvalidDefinition`. Any call it now rejects was already not doing what it appeared to do.
 
 ### Fixed
+
+- **`engine.intercept({ caCertPath, caKeyPath })` on the spawn and remote transports is refused
+  instead of silently dropped** (issue #129, absorbing #134). Those transports attach to a listener
+  the engine's operator already started; the backend read only `host`/`port` and discarded the CA
+  paths, handing back a handle as if the caller's CA were in use while traffic was signed by
+  whatever CA the listener had. The #124 guard for `auth` now covers every startup-only option and
+  throws one `InterceptUnavailable` naming all of them, with the real reason — attach-only is the
+  SDK's design (the engine has had `POST /intercept` since v0.13.0, with `auth` since v0.17.0;
+  starting a TLS-intercepting
+  listener on an engine the SDK did not start is the operator's call, and on spawn the spawn-time
+  flags configure the listener before it accepts a byte) — rather than the stale "no runtime
+  endpoint (rift#493)".
+
+- **The remote transport attaches to the real intercept listener** (issue #129). With no `port`,
+  `engine.intercept()` used to default to the *admin* port, which the listener can never share, so
+  the handle always pointed at the wrong door. It now asks `GET /intercept` (engine >= 0.13.0) for
+  the listener's port and attaches there on the admin hostname (the engine's own `interceptUrl` is
+  its bind address, e.g. `0.0.0.0`); a 404 is the usual "start the server with --intercept-port". An
+  explicit `intercept({ port })` still attaches through the `GET /intercept/rules` probe every
+  engine answers, so nothing changes at the 0.12.0 floor — on such an engine the port-less call gets
+  the `--intercept-port` message with a hint to pass `intercept({ port })`. The "needs an explicit
+  port" error for a port-less admin URL is gone — the engine answers the port.
 
 - **Intercept `serve()` follows the engine 0.18.0 serve contract** (issue #144). The engine's serve
   stub now takes a string *or an array* per header (one line per value, rift#936) and any JSON

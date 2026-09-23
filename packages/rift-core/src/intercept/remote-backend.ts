@@ -1,15 +1,19 @@
 /**
  * Remote/spawn `InterceptBackend` adapter (issue #11).
  *
- * Both transports ATTACH to an intercept listener started out-of-process (via the engine's
- * `--intercept-port` CLI flag) rather than starting one in-process — there is no runtime "start
- * intercept" HTTP endpoint yet (rift#493 tracks it upstream). So `startIntercept` here never starts
- * anything server-side: it confirms the admin API's `/intercept/*` routes are live — a 404 there is
- * the documented "not started with --intercept-port" signal, surfaced as `ImposterNotFound` by
- * `RemoteClient`'s generic 404 mapping, which `engine.ts`'s per-transport dispatch translates into
- * the exact `InterceptUnavailable` guidance string — and echoes back the `{host, port}` its caller
- * (`engine.ts`) already resolved, in the shared `{interceptPort, interceptUrl}` shape every
- * `InterceptBackend` returns.
+ * Both transports ATTACH to an intercept listener the engine's operator already started — at spawn
+ * time through `--intercept-port` (+ CA/auth flags), or however a remote engine was launched. The
+ * SDK does not start or reconfigure a TLS-intercepting listener on an engine it did not start; that
+ * is a deployment decision (the engine models its exposure policy the same way — an operator flag,
+ * not a request field). So `startIntercept` here never starts anything:
+ * startup-only options (`auth`, `caCertPath`/`caKeyPath`) never reach it, because the guard in
+ * `engine.ts` refuses them first, and what arrives is the attach point `{host, port}` `engine.ts`
+ * resolved — from the spawn flags, from the caller's explicit `port`, or from `GET /intercept`.
+ *
+ * With `probe` on (the default) it confirms the listener through `GET /intercept/rules`, the one
+ * route every engine at the 0.12.0 floor answers; a 404 surfaces as `ImposterNotFound` and
+ * `engine.ts` maps it to the documented `InterceptUnavailable`. `engine.ts` turns the probe off when
+ * it already proved liveness through `GET /intercept`, so an attach is one HTTP call, never two.
  */
 
 import { hostForUrl } from '../host.js';
@@ -17,11 +21,14 @@ import type { RemoteClient } from '../remote/client.js';
 import type { InterceptBackend } from './types.js';
 
 export class RemoteInterceptBackend implements InterceptBackend {
-  constructor(private readonly client: RemoteClient) {}
+  constructor(
+    private readonly client: RemoteClient,
+    private readonly opts: { probe?: boolean } = {}
+  ) {}
 
   async startIntercept(optionsJson: string): Promise<{ interceptPort: number; interceptUrl: string }> {
     const { host, port } = JSON.parse(optionsJson) as { host: string; port: number };
-    await this.client.interceptListRules();
+    if (this.opts.probe !== false) await this.client.interceptListRules();
     return { interceptPort: port, interceptUrl: `http://${hostForUrl(host)}:${port}` };
   }
 
