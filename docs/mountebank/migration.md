@@ -31,7 +31,8 @@ reference) for completeness.
 |---|---|
 | `POST /imposters` with `{ port, protocol: 'http', stubs: [...] }` | `engine.create(imposter().port(n).stub(...))` |
 | `mb.create({ port, ... })` (or `@rift-vs/rift`'s old `create()`) | `create({ port, ... })` — unchanged, see the [per-transport quick starts](../getting-started/transports.md) |
-| `{ protocol: 'https', cert, key, mutualAuth: true }` | `imposter().https({ cert, key, mutualAuth: true })` |
+| `{ protocol: 'https', cert, key, mutualAuth: true }` | `imposter().https({ cert, key }).requireClientCertificate()` — requires a client certificate on engine ≥ 0.18.0 (older engines accepted everyone; `create()` refuses below 0.18.0) |
+| `{ protocol: 'https', mutualAuth: true, rejectUnauthorized: true, ca }` | `imposter().https(...).requireClientCertificate([caPem])` — one anchor emits `ca` as a string, several as an array; `listImposters({ replayable: true })` carries the CA material; the per-imposter `toJson()` omits it like `cert`/`key` |
 | `{ recordRequests: true }` | `imposter().record()` |
 | `{ recordMatches: true }` | `imposter().recordMatches()` |
 | `{ allowCORS: true }` | `imposter().allowCORS()` |

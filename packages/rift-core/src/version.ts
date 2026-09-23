@@ -5,9 +5,14 @@
  * `engine.ts` — `engine.ts` already imports `spawn/spawn.js`, so that direction would cycle.
  */
 
-/** Reads the engine version out of a `GET /config` body (`{ options: { version } }`). `undefined`
- * when the engine reported none — old builds did not. */
+/**
+ * Reads the engine version out of a `GET /config` body. The engine writes it at the top level
+ * (`{ version, commit, options: {...} }` — `handle_config` in rift-http-proxy, since the admin API
+ * exists); `options.version` is kept as a fallback for the shape the SDK used to expect (issue
+ * #167). `undefined` when neither carries one.
+ */
 export function extractEngineVersion(cfg: Record<string, unknown>): string | undefined {
+  if (typeof cfg['version'] === 'string') return cfg['version'];
   const options = cfg['options'];
   if (options === null || typeof options !== 'object') return undefined;
   const { version } = options as { version?: unknown };

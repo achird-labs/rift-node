@@ -611,7 +611,14 @@ interface ImposterBuilder {
   port(n: number): this;                    // explicit ports ALWAYS respected
   host(h: string): this;
   protocol(p: 'http' | 'https'): this;
-  https(tls?: { cert?: string; key?: string; mutualAuth?: boolean }): this;  // protocol + PEM
+  https(tls?: { cert?: string; key?: string; mutualAuth?: boolean }): this;  // protocol + PEM; mutualAuth
+                                                                             // REQUIRES a client cert on engine >= 0.18.0
+  requireClientCertificate(caPems?: readonly string[]): this; // https + mutualAuth; with anchors also
+                                                     // rejectUnauthorized + ca (1 → string, N → array).
+                                                     // Gated in create()/replaceAll(): engine < 0.18.0 or an
+                                                     // unreadable version → EngineVersionError (fail closed;
+                                                     // versionCheck 'off' skips, 'warn' lets an unreadable
+                                                     // version through). The raw engine.admin surface is not gated.
   record(): this;  recordMatches(): this;  allowCORS(): this;
   strictBehaviors(): this;
   defaultResponse(r: ResponseBuilder | wire.IsResponse): this;

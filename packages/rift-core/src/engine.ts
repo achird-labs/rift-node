@@ -742,6 +742,13 @@ async function startInterceptWithBackend(
 interface EngineOptions {
   hostHint?: string;
   onClose?: () => Promise<void>;
+  /** The engine version the transport established at startup (connect's and embedded's `/config`
+   * / build-info check). When absent — spawn — an imposter-key feature gate resolves it once from
+   * `/config`, and only when an imposter actually carries a gated key. */
+  engineVersion?: string;
+  /** The startup policy, carried over to the imposter-key feature gates: `'off'` skips them and
+   * `'warn'` lets an unreadable version through (the startup check already said so). */
+  versionCheck?: 'fail' | 'warn' | 'off';
   /** Overrides `buildInfo()`'s default `admin.config()` round-trip — the embedded transport already
    * has its parsed `BuildInfo` in hand (from `librift_ffi`'s build-info payload) and never needs a
    * live plane just to answer this. */
@@ -759,9 +766,32 @@ interface EngineOptions {
   interceptSpawn?: { host: string; port: number };
 }
 
+/**
+ * Imposter keys an older engine silently ignores (they are not serve options, so `serveOptions`
+ * presence cannot detect them). Fail closed: gate on the engine version before sending.
+ */
+const IMPOSTER_KEY_REQUIREMENTS: ReadonlyArray<{
+  since: string;
+  carries: (imp: Imposter) => boolean;
+  feature: string;
+  /** What an older engine does with the key — the reason the gate fails closed. */
+  consequence: string;
+  remedy: string;
+}> = [
+  {
+    since: '0.18.0',
+    // `mutualAuth: false` / `rejectUnauthorized: false` are what an older engine does anyway.
+    carries: (imp) => imp.mutualAuth === true || imp.rejectUnauthorized === true || imp.ca !== undefined,
+    feature: 'client-certificate authentication (mutualAuth / rejectUnauthorized / ca)',
+    consequence: 'would accept every client',
+    remedy: 'drop the keys (requireClientCertificate / https({ mutualAuth }))',
+  },
+];
+
 export class Engine implements RiftEngine {
   #closed = false;
   #interceptHandle: InterceptHandle | undefined;
+  #engineVersion: Promise<string | undefined> | undefined;
 
   constructor(
     private readonly adminClient: AdminApi,
@@ -774,8 +804,66 @@ export class Engine implements RiftEngine {
   }
 
   async create(def: ImposterBuilder | Imposter): Promise<ImposterHandle> {
-    const created = await this.adminClient.createImposter(toWireImposter(def));
+    const wire = toWireImposter(def);
+    await this.#assertImposterKeysSupported([wire]);
+    const created = await this.adminClient.createImposter(wire);
     return this.handleFrom(created);
+  }
+
+  /**
+   * The engine version, as the transport recorded it at startup or — spawn, which records none —
+   * resolved once from `/config`. A failed lookup is not kept: a blip while the engine is still
+   * coming up must not pin every later `create()` to that one error.
+   */
+  #resolveEngineVersion(): Promise<string | undefined> {
+    if (this.opts.engineVersion !== undefined) return Promise.resolve(this.opts.engineVersion);
+    this.#engineVersion ??= this.adminClient
+      .config()
+      .then(extractEngineVersion)
+      .catch((error: unknown) => {
+        this.#engineVersion = undefined;
+        throw error;
+      });
+    return this.#engineVersion;
+  }
+
+  /**
+   * Fail closed on a key an older engine would silently ignore — for client auth that is a
+   * listener that accepts every client while the caller believes it is guarded. A version that
+   * cannot be read is not a pass either (the same rule as `isAtLeastVersion`), except under
+   * `versionCheck: 'warn'`, which already announced the unreadable version at startup and asked to
+   * proceed; `'off'` skips the gate. `engine.admin` is the raw surface and is not gated.
+   */
+  async #assertImposterKeysSupported(imposters: readonly Imposter[]): Promise<void> {
+    if (this.opts.versionCheck === 'off') return;
+    const [first, ...rest] = IMPOSTER_KEY_REQUIREMENTS.filter((req) => imposters.some((imp) => req.carries(imp)));
+    if (first === undefined) return;
+    const needed = [first, ...rest];
+    const version = await this.#resolveEngineVersion();
+    const found = version === undefined ? undefined : parseSemver(version);
+    // Spawn has no `versionCheck` knob, so do not point spawn callers at one.
+    const skip = this.transport === 'spawn' ? '' : ", or set versionCheck: 'off' to send it anyway";
+    if (version === undefined || found === undefined) {
+      if (this.opts.versionCheck === 'warn') return;
+      const req = first;
+      throw new EngineVersionError(
+        version ?? 'unknown',
+        req.since,
+        `${req.feature} needs rift >= ${req.since}, and the engine version could not be read ` +
+          `(${version ?? 'none reported'}) — an older engine ${req.consequence}. Upgrade the engine, ${req.remedy}${skip}.`
+      );
+    }
+    for (const req of needed) {
+      const required = parseSemver(req.since);
+      if (required !== undefined && isBelowVersion(found, required)) {
+        throw new EngineVersionError(
+          version,
+          req.since,
+          `${req.feature} needs rift >= ${req.since}; the running engine (${version}) ignores it and ` +
+            `${req.consequence}. Upgrade the engine, ${req.remedy}${skip}.`
+        );
+      }
+    }
   }
 
   async get(port: number): Promise<ImposterHandle> {
@@ -793,7 +881,9 @@ export class Engine implements RiftEngine {
   }
 
   async replaceAll(defs: Array<ImposterBuilder | Imposter>): Promise<ImposterHandle[]> {
-    const result = await this.adminClient.replaceImposters({ imposters: defs.map(toWireImposter) });
+    const imposters = defs.map(toWireImposter);
+    await this.#assertImposterKeysSupported(imposters);
+    const result = await this.adminClient.replaceImposters({ imposters });
     return result.imposters.map((imp) => this.handleFrom(imp));
   }
 
@@ -1027,8 +1117,9 @@ async function connectEngine(url: string, opts: ConnectOptions = {}): Promise<En
   });
 
   const versionCheck = opts.versionCheck ?? 'fail';
+  let found: string | undefined;
   if (versionCheck !== 'off') {
-    const found = extractEngineVersion(await client.config());
+    found = extractEngineVersion(await client.config());
     const issue = versionIssue(found);
     if (issue !== undefined) {
       if (versionCheck === 'fail') {
@@ -1038,7 +1129,7 @@ async function connectEngine(url: string, opts: ConnectOptions = {}): Promise<En
     }
   }
 
-  return new Engine(client, 'remote', { hostHint: new URL(normalized).hostname });
+  return new Engine(client, 'remote', { hostHint: new URL(normalized).hostname, engineVersion: found, versionCheck });
 }
 
 async function spawnEngine(opts: SpawnOptions = {}): Promise<Engine> {
