@@ -75,6 +75,16 @@ All notable changes to `@rift-vs/rift` are documented here. This project adheres
 
 ### Fixed
 
+- **`Headers`, `URLSearchParams`, `FormData`, `Blob`, `Request`, `Response`, `AbortController`,
+  `AbortSignal` and `WeakRef` are refused instead of reaching the engine as `{}`** (issue #132).
+  #126 guarded the ECMAScript slot-backed containers (`Map`, `Set`, …) and left out the host objects
+  with the same always-`{}` serialization. Every one of these is a global from Node 20, this
+  package's `engines` floor, and `headers: new Headers({...})` on a stub response, or a `Request`
+  stashed in flow state, is exactly the slip an HTTP-mocking SDK invites. Same
+  `WireValidationError` and JSONPath locator as the #126 guard, through every serializer (admin
+  payloads, `addRule()`, intercept `serve()` bodies). `URL` (has `toJSON`) and typed-array views
+  (index-keyed, lossy but not empty) still pass.
+
 - **An IPv6 host no longer builds an invalid URL** (issue #143). Engine 0.18.0 accepts a bare IPv6
   literal on every door (`--host ::1`, an imposter's `host`, the intercept listener — rift#1137),
   but the SDK built its URLs by concatenation, so `spawn({ host: '::1' })` produced
