@@ -21,6 +21,7 @@ import {
   Script,
 } from '../../src/dsl/index.js';
 import { InvalidDefinition } from '../../src/errors.js';
+import { fromJson, toWireJson } from '../../src/model/index.js';
 
 describe('DSL #23 — behaviors', () => {
   it('copy (single spec) emits a one-element _behaviors.copy array', () => {
@@ -360,5 +361,112 @@ describe('DSL #23 — raw patch + badRequest', () => {
   it('raw(patch) applies a last-wins shallow merge', () => {
     const r = okJson({ a: 1 }).raw({ statusCode: 418 }).build();
     expect(r.statusCode).toBe(418);
+  });
+});
+
+describe('DSL — _rift.stateOps builder (issue #149)', () => {
+  it('sugar methods emit the exact wire ops, in call order, across chained calls', () => {
+    const r = ok().setState('user', '{{ request.query.u }}').incrementState('hits').incrementState('bumps', 5).deleteState('tmp').clearFlowState().build();
+    expect(r._rift?.stateOps).toEqual([
+      { op: 'set', key: 'user', value: '{{ request.query.u }}' },
+      { op: 'increment', key: 'hits' },
+      { op: 'increment', key: 'bumps', by: 5 },
+      { op: 'delete', key: 'tmp' },
+      { op: 'clearFlow' },
+    ]);
+    // `by` is omitted when not given (the engine defaults to 1) and written when given, even as 1.
+    expect(JSON.stringify(ok().incrementState('h').build()._rift?.stateOps)).toBe('[{"op":"increment","key":"h"}]');
+    expect(ok().incrementState('h', 1).build()._rift?.stateOps).toEqual([{ op: 'increment', key: 'h', by: 1 }]);
+    expect(ok().incrementState('h', -2).build()._rift?.stateOps).toEqual([{ op: 'increment', key: 'h', by: -2 }]);
+  });
+
+  it('stateOps(...ops) appends typed ops and interleaves with the sugar', () => {
+    const r = ok()
+      .stateOps({ op: 'set', key: 'a', value: '1' }, { op: 'clearFlow' })
+      .incrementState('b')
+      .stateOps({ op: 'delete', key: 'c' })
+      .build();
+    expect(r._rift?.stateOps?.map((o) => o.op)).toEqual(['set', 'clearFlow', 'increment', 'delete']);
+    expect(ok().stateOps().build()._rift).toBeUndefined();
+    expect(ok().build()._rift).toBeUndefined();
+  });
+
+  it('composes with the other _rift extensions on an is response', () => {
+    const r = ok('{{ state.hits }}').templated().incrementState('hits').build();
+    expect(r).toEqual({ is: { statusCode: 200, body: '{{ state.hits }}' }, _rift: { templated: true, stateOps: [{ op: 'increment', key: 'hits' }] } });
+  });
+
+  it('refuses a non-string key or value and a non-integer `by` — no silent stringification', () => {
+    for (const bad of [() => ok().setState('', 'v'), () => ok().setState('k', 1 as unknown as string), () => ok().deleteState(''), () => ok().incrementState('k', 1.5), () => ok().incrementState('k', NaN), () => ok().incrementState('k', Infinity), () => ok().incrementState('k', 2 ** 53)]) {
+      expect(bad).toThrow(InvalidDefinition);
+    }
+    expect(() => ok().setState('k', 1 as unknown as string)).toThrow(/setState/);
+    expect(() => ok().incrementState('k', 1.5)).toThrow(/incrementState/);
+  });
+
+  it('stateOps() validates raw objects: unknown op, missing key, wrong value type', () => {
+    for (const bad of [{ op: 'bump', key: 'k' }, { op: 'set', key: 'k' }, { op: 'set', key: 'k', value: 1 }, { op: 'increment', key: 'k', by: '1' }, { op: 'delete' }, 'set']) {
+      expect(() => ok().stateOps(bad as never)).toThrow(InvalidDefinition);
+    }
+    expect(() => ok().stateOps({ op: 'bump', key: 'k' } as never)).toThrow(/stateOps/);
+  });
+
+  it('refuses stateOps on a response shape the engine never runs them on (proxy / inject / fault / script)', () => {
+    // Engine 0.18.0 runs stateOps only after an `is` response is rendered; on every other shape it
+    // never runs them and reports it only as an analysis warning. The legacy tcp fault string is the
+    // shape a list-based check would miss — it is a `_rift`-only response with no `is`.
+    for (const shape of [() => proxyTo('http://u').incrementState('h'), () => inject('function(){}').incrementState('h'), () => fault('CONNECTION_RESET_BY_PEER').incrementState('h'), () => fault('ECONNRESET').incrementState('h'), () => script({ code: 'return 1' }).incrementState('h')]) {
+      expect(() => shape().build()).toThrow(InvalidDefinition);
+      expect(() => shape().build()).toThrow(/stateOps/);
+    }
+    // Order of the calls does not matter — the check runs at build().
+    expect(() => ok().incrementState('h').script({ code: 'return 1' }).build()).toThrow(InvalidDefinition);
+  });
+
+  it('raw() stays the unchecked escape hatch for a future op shape — and replaces the whole _rift block', () => {
+    const r = ok().raw({ _rift: { stateOps: [{ op: 'future', key: 'k' } as never] } }).build();
+    expect(r._rift?.stateOps).toEqual([{ op: 'future', key: 'k' }]);
+    // raw() is a top-level last-wins merge (documented): a `_rift` patch after the sugar drops the ops.
+    expect(ok().incrementState('h').raw({ _rift: { templated: true } }).build()._rift).toEqual({ templated: true });
+  });
+
+  it('stores a validated copy: mutating or reusing the caller\'s object after the call changes nothing', () => {
+    const op = { op: 'set', key: 'a', value: '1' } as const;
+    const mutable: { op: 'set'; key: string; value: string } = { ...op };
+    const b = ok().stateOps(mutable);
+    mutable.value = '2';
+    (mutable as { value: unknown }).value = 12345;
+    expect(() => b.stateOps(mutable as never)).toThrow(InvalidDefinition);
+    expect(b.build()._rift?.stateOps).toEqual([{ op: 'set', key: 'a', value: '1' }]);
+    // A reused object across calls keeps each call's own values.
+    const shared = { op: 'set', key: 'c', value: '' } as { op: 'set'; key: string; value: string };
+    const c = ok();
+    for (const v of ['1', '2', '3']) {
+      shared.value = v;
+      c.stateOps(shared);
+    }
+    expect(c.build()._rift?.stateOps?.map((o) => (o as { value?: string }).value)).toEqual(['1', '2', '3']);
+  });
+
+  it('build() is repeatable: a later call on the builder does not alias an earlier result', () => {
+    const b = ok().incrementState('h');
+    const first = b.build();
+    b.incrementState('h2');
+    expect(first._rift?.stateOps).toEqual([{ op: 'increment', key: 'h' }]);
+    expect(b.build()._rift?.stateOps).toHaveLength(2);
+  });
+
+  it('every sugar method names itself in its error; by: 0 and -0 are accepted and serialize as 0', () => {
+    expect(() => ok().deleteState('')).toThrow(/deleteState\(\)/);
+    expect(() => ok().setState('', 'v')).toThrow(/setState\(\)/);
+    expect(() => ok().incrementState('', 1)).toThrow(/incrementState\(\)/);
+    expect(ok().incrementState('h', 0).build()._rift?.stateOps).toEqual([{ op: 'increment', key: 'h', by: 0 }]);
+    expect(JSON.stringify(ok().incrementState('h', -0).build()._rift?.stateOps)).toBe('[{"op":"increment","key":"h","by":0}]');
+  });
+
+  it('a stub carrying state ops round-trips through the wire model byte-exact', () => {
+    const built = onGet('/x').willReturn(ok().setState('u', '{{ request.query.u }}').incrementState('h', 3).clearFlowState()).build();
+    const imp = { port: 4547, protocol: 'http', stubs: [built] };
+    expect(toWireJson(fromJson(imp))).toEqual(JSON.parse(JSON.stringify(imp)));
   });
 });

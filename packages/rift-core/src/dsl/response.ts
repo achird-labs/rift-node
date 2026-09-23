@@ -15,6 +15,7 @@ import type {
   JsonValue,
   ProxyResponse,
   RiftResponseExtension,
+  StateOp,
   StubResponse,
 } from '../model/index.js';
 import { InvalidDefinition } from '../errors.js';
@@ -76,6 +77,7 @@ export class ResponseBuilder {
   private legacyTcpFault: string | undefined;
   private scriptSpec: ScriptSpec | undefined;
   private templatedFlag = false;
+  private stateOpsList: StateOp[] = [];
   private rawPatch: Partial<StubResponse> | undefined;
   /** Set by `ProxyBuilder`/`proxyTo()`; protected so the subclass can assign it directly. */
   protected proxyConfig: ProxyResponse | undefined;
@@ -249,6 +251,44 @@ export class ResponseBuilder {
     return this;
   }
 
+  /**
+   * Appends flow-state writes the engine runs after this `is` response is rendered, in order
+   * (`_rift.stateOps`, engine >= 0.18.0 — an older engine drops the block on parse, which is why
+   * `create()`/`replaceAll()` refuse to send it there). Each op is validated here rather than
+   * trusted: the engine's parse error would name a stub index, not the call. `proxy` / `inject` /
+   * `fault` / `script` responses never run them and are refused at `build()`.
+   */
+  stateOps(...ops: StateOp[]): this {
+    for (const op of ops) this.pushStateOp(op, 'stateOps()');
+    return this;
+  }
+
+  /** After this response, stores `value` (a `{{ }}` template; `previousValue` is in scope) under `key`. */
+  setState(key: string, value: string): this {
+    return this.pushStateOp({ op: 'set', key, value }, 'setState()');
+  }
+
+  /** After this response, adds `by` (default 1, may be negative) to the integer under `key`, creating it at 0. */
+  incrementState(key: string, by?: number): this {
+    return this.pushStateOp(by === undefined ? { op: 'increment', key } : { op: 'increment', key, by }, 'incrementState()');
+  }
+
+  /** After this response, removes `key` from the request's flow state. */
+  deleteState(key: string): this {
+    return this.pushStateOp({ op: 'delete', key }, 'deleteState()');
+  }
+
+  /** After this response, removes every key of the request's flow. */
+  clearFlowState(): this {
+    return this.pushStateOp({ op: 'clearFlow' }, 'clearFlowState()');
+  }
+
+  /** Validates and stores a fresh copy, so a caller's object mutated after the call cannot reach the wire unchecked. */
+  private pushStateOp(op: unknown, method: string): this {
+    this.stateOpsList.push(readStateOp(op, method));
+    return this;
+  }
+
   /** Last-wins shallow merge applied at the TOP level of the built response, after everything else. */
   raw(patch: Partial<StubResponse>): this {
     this.rawPatch = { ...this.rawPatch, ...patch };
@@ -279,6 +319,16 @@ export class ResponseBuilder {
     ) {
       throw new InvalidDefinition(
         'a proxy, inject, or native-fault response cannot also carry an `is` body (status/headers/body)'
+      );
+    }
+    // The engine runs `_rift.stateOps` only after an `is` response is rendered. On every other
+    // shape — proxy, inject, a top-level or legacy fault, script, or a bare `_rift` block — it never
+    // runs them and says so only as an analysis warning, so refuse here instead. Keyed on whether an
+    // `is` block is emitted (the guard above already refused `is` content next to proxy/inject/fault)
+    // rather than on a list of shapes, so a future `is`-less shape is covered too.
+    if (this.stateOpsList.length > 0 && (this.scriptSpec !== undefined || !this.hasIsContent())) {
+      throw new InvalidDefinition(
+        'stateOps only run after an `is` response is rendered; a proxy, inject, fault or script response never executes them — write the state from the script instead'
       );
     }
     if (this.legacyTcpFault !== undefined && 'tcp' in this.riftFault) {
@@ -312,9 +362,53 @@ export class ResponseBuilder {
     if (Object.keys(faultBlock).length > 0) rift.fault = faultBlock;
     if (this.scriptSpec !== undefined) rift.script = this.scriptSpec;
     if (this.templatedFlag) rift.templated = true;
+    if (this.stateOpsList.length > 0) rift.stateOps = this.stateOpsList.map((op) => ({ ...op }));
     if (Object.keys(rift).length > 0) out._rift = rift;
 
     return this.rawPatch !== undefined ? { ...out, ...this.rawPatch } : out;
+  }
+}
+
+/**
+ * Reads one state op off an untrusted value the way the engine's parser would (`#[serde(tag = "op")]`,
+ * `by: i64`), naming the DSL method in the error, and returns a freshly built op — never the caller's
+ * object. Refuses rather than coerces: a numeric `value` would be stringified silently by
+ * `JSON.stringify`, and a fractional or unsafe `by` would not survive the engine's `i64` exactly.
+ */
+function readStateOp(raw: unknown, method: string): StateOp {
+  const fields = raw !== null && typeof raw === 'object' ? (raw as Record<string, unknown>) : undefined;
+  const op = fields?.['op'];
+  const key = fields?.['key'];
+  const requireKey = (): string => {
+    if (typeof key !== 'string' || key.length === 0) {
+      throw new InvalidDefinition(`${method}: key must be a non-empty string, got ${JSON.stringify(key)}`);
+    }
+    return key;
+  };
+  switch (op) {
+    case 'set': {
+      const value = fields?.['value'];
+      const k = requireKey();
+      if (typeof value !== 'string') {
+        throw new InvalidDefinition(`${method}: value must be a string (a {{ }} template), got ${JSON.stringify(value)}`);
+      }
+      return { op: 'set', key: k, value };
+    }
+    case 'increment': {
+      const by = fields?.['by'];
+      const k = requireKey();
+      if (by === undefined) return { op: 'increment', key: k };
+      if (typeof by !== 'number' || !Number.isSafeInteger(by)) {
+        throw new InvalidDefinition(`${method}: by must be an integer, got ${JSON.stringify(by) ?? String(by)}`);
+      }
+      return { op: 'increment', key: k, by };
+    }
+    case 'delete':
+      return { op: 'delete', key: requireKey() };
+    case 'clearFlow':
+      return { op: 'clearFlow' };
+    default:
+      throw new InvalidDefinition(`${method}: op must be one of set / increment / delete / clearFlow, got ${JSON.stringify(raw)}`);
   }
 }
 

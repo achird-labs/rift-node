@@ -783,8 +783,21 @@ const IMPOSTER_KEY_REQUIREMENTS: ReadonlyArray<{
     // `mutualAuth: false` / `rejectUnauthorized: false` are what an older engine does anyway.
     carries: (imp) => imp.mutualAuth === true || imp.rejectUnauthorized === true || imp.ca !== undefined,
     feature: 'client-certificate authentication (mutualAuth / rejectUnauthorized / ca)',
-    consequence: 'would accept every client',
+    consequence: 'ignores the keys and would accept every client',
     remedy: 'drop the keys (requireClientCertificate / https({ mutualAuth }))',
+  },
+  {
+    since: '0.18.0',
+    carries: (imp) =>
+      (imp.stubs ?? []).some((stub) =>
+        (stub.responses ?? []).some((response) => {
+          const ops = response._rift?.stateOps;
+          return Array.isArray(ops) && ops.length > 0;
+        })
+      ),
+    feature: 'declarative flow-state writes (_rift.stateOps: setState / incrementState / deleteState / clearFlowState)',
+    consequence: 'drops the block on parse, so the writes never run',
+    remedy: 'drop the state ops or write them from script()',
   },
 ];
 
@@ -859,8 +872,8 @@ export class Engine implements RiftEngine {
         throw new EngineVersionError(
           version,
           req.since,
-          `${req.feature} needs rift >= ${req.since}; the running engine (${version}) ignores it and ` +
-            `${req.consequence}. Upgrade the engine, ${req.remedy}${skip}.`
+          `${req.feature} needs rift >= ${req.since}; the running engine (${version}) ${req.consequence}. ` +
+            `Upgrade the engine, ${req.remedy}${skip}.`
         );
       }
     }

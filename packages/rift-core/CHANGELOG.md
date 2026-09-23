@@ -7,6 +7,19 @@ All notable changes to `@rift-vs/rift` are documented here. This project adheres
 
 ### Added
 
+- **Declarative flow-state writes: `setState()`, `incrementState()`, `deleteState()`,
+  `clearFlowState()` and `stateOps(...)` on every response builder** (issue #149). Engine 0.18.0
+  runs `_rift.stateOps` after an `is` response is rendered, in order, against the request's flow
+  (rift#969) — reading state was already declarative via `{{ state.<key> }}`, writing it needed an
+  `inject`. The `StateOp` union types the four ops on `RiftResponseExtension.stateOps`;
+  `incrementState(key)` omits `by` (the engine's default of 1) and writes it when given. Each op is
+  validated at the call (non-empty string key, string `value`, integer `by`), and `build()` refuses
+  the block on a proxy, inject, fault or script response, where the engine never runs it and says
+  so only as an analysis warning. The intercept `serve()` guard now names `stateOps()` for the
+  extension it cannot deliver. Engines <= 0.17.0 drop the block on parse, so `create()` and
+  `replaceAll()` refuse to send it to one through the same fail-closed version gate as
+  client-certificate auth (`EngineVersionError`; `versionCheck: 'off'` sends it anyway).
+
 - **`imposter().requireClientCertificate(caPems?)` — mutual TLS on HTTPS imposters** (issue #137).
   Engine 0.18.0 honours `mutualAuth`, `rejectUnauthorized` and `ca` (rift#977); before, the keys
   were dropped on parse and a listener documented as requiring client certificates accepted

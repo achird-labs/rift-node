@@ -446,6 +446,14 @@ interface ResponseBuilder /* R */ {
   binaryBody(data: Uint8Array | string): this;           // base64-encodes; wire: _mode: "binary";
                                                          // a string must be canonical base64 (throws otherwise)
   templated(): this;                                     // wire: _rift.templated: true
+  // flow-state writes run after this `is` response, in order (wire: _rift.stateOps; engine >= 0.18.0 —
+  // create()/replaceAll() refuse it on an older engine, which drops the block on parse; same gate as
+  // requireClientCertificate). Refused at build() on proxy/inject/fault/script responses.
+  stateOps(...ops: wire.StateOp[]): this;
+  setState(key: string, value: string): this;            // value is a {{ }} template; previousValue in scope
+  incrementState(key: string, by?: number): this;        // integer, default 1, may be negative
+  deleteState(key: string): this;
+  clearFlowState(): this;
 
   // behaviors (_behaviors) — execution order in-engine: copy → lookup → decorate → wait
   latency(ms: number | { min: number; max: number } | string): this;

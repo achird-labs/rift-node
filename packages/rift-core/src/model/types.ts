@@ -199,10 +199,27 @@ export interface DatasetBinding {
   [key: string]: unknown;
 }
 
+/**
+ * One entry of a response's `_rift.stateOps` (engine >= 0.18.0, rift#969): a flow-state write the
+ * engine runs after an `is` response is rendered, in list order, against the request's resolved
+ * flow id — no script needed. `set` renders `value` in the `{{ }}` grammar (plus `previousValue`),
+ * and stores a canonical integer as a number so `increment` continues from it; `increment` adds
+ * `by` (default 1, may be negative). An imposter with state ops but no `_rift.flowState` gets an
+ * in-memory store. Engines <= 0.17.0 dropped the block on parse. The model validates nothing: an
+ * op this union does not name still round-trips at runtime.
+ */
+export type StateOp =
+  | { op: 'set'; key: string; value: string }
+  | { op: 'increment'; key: string; by?: number }
+  | { op: 'delete'; key: string }
+  | { op: 'clearFlow' };
+
 export interface RiftResponseExtension {
   fault?: JsonValue;
   script?: JsonValue;
   templated?: boolean;
+  /** Declarative post-response flow-state writes (engine >= 0.18.0; `is` responses only). */
+  stateOps?: StateOp[];
   /** Carrier only (engine >= 0.18.0, rift#973): round-tripped through `GET /imposters`, inert on
    * standalone Rift, dropped on parse by engine <= 0.17.0. */
   dataset?: DatasetBinding;

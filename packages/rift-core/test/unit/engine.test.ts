@@ -7,7 +7,7 @@
 
 import { jest } from '@jest/globals';
 import { Engine, type AdminApi } from '../../src/engine.js';
-import { imposter, onGet, okJson } from '../../src/dsl/index.js';
+import { imposter, onGet, ok, okJson } from '../../src/dsl/index.js';
 import { ImposterNotFound, EngineVersionError, EngineUnavailable } from '../../src/errors.js';
 import type { Imposter, ImpostersConfig, Stub, RecordedRequest } from '../../src/model/index.js';
 
@@ -402,6 +402,21 @@ describe('issue #21 — RiftEngine facade over AdminApi', () => {
       await expect(new Engine(none, 'spawn', { hostHint: '127.0.0.1' }).create(mtls())).rejects.toThrow(/none reported/);
       const warn = new Engine(new FakeAdminApi(), 'remote', { hostHint: '127.0.0.1', engineVersion: 'dev-build', versionCheck: 'warn' });
       await expect(warn.create(mtls())).resolves.toBeDefined();
+    });
+
+    it('gates _rift.stateOps the same way — an older engine drops the block on parse (issue #149)', async () => {
+      const withOps = () => imposter('c').port(4448).stub(onGet('/h').willReturn(ok().incrementState('hits')));
+      const old = new Engine(new FakeAdminApi(), 'remote', { hostHint: '127.0.0.1', engineVersion: '0.17.0' });
+      const err = await old.create(withOps()).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(EngineVersionError);
+      expect((err as Error).message).toMatch(/stateOps/);
+      expect((err as Error).message).toMatch(/never run/);
+      await expect(old.replaceAll([withOps()])).rejects.toThrow(EngineVersionError);
+      const current = new Engine(new FakeAdminApi(), 'remote', { hostHint: '127.0.0.1', engineVersion: '0.18.0' });
+      await expect(current.create(withOps())).resolves.toBeDefined();
+      // A stub without ops, or an empty list smuggled in raw, is not gated.
+      await expect(old.create(imposter('p').port(4449).stub(onGet('/h').willReturn(ok())))).resolves.toBeDefined();
+      await expect(old.create({ port: 4450, protocol: 'http', stubs: [{ responses: [{ is: {}, _rift: { stateOps: [] } }] }] })).resolves.toBeDefined();
     });
 
     it('does not point a spawn caller at versionCheck, which spawn does not have', async () => {
