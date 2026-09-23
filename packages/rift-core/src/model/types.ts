@@ -100,19 +100,22 @@ export interface IsResponse {
 }
 
 /**
- * The engine's inline `serve` stub — deliberately narrower than {@link IsResponse}.
+ * The engine's inline `serve` stub — narrower than {@link IsResponse}: no `_mode`, no `_behaviors`,
+ * no `_rift`.
  *
- * `crates/rift-http-proxy/src/intercept_rules.rs` declares `status_code: u16`,
- * `headers: HashMap<String, String>` and `body: Option<String>`, so an object body or a multi-value
- * header is a serde error rather than a richer response. `InterceptHandle.serve()` normalizes an
- * `IsResponse` into this shape; `addRule()` takes it verbatim.
+ * `crates/rift-http-proxy/src/intercept_rules.rs` (engine >= 0.18.0) declares `status_code: u16`
+ * (a numeric string is accepted), `headers: HashMap<String, Vec<String>>` (a string or an array —
+ * one header line per value) and `body: Option<serde_json::Value>`. `InterceptHandle.serve()`
+ * normalizes an `IsResponse` into this shape; `addRule()` takes it verbatim. An engine <= 0.17.0
+ * holds one value per header and a string body, and answers the array form with an opaque serde
+ * error.
  */
 export interface ServeStub {
   statusCode?: number;
-  headers?: { [name: string]: string };
-  /** `null` on the read path only: the engine's `body` is an `Option<String>` with no
-   * `skip_serializing_if`, so `GET /intercept/rules` reports an absent body as an explicit `null`. */
-  body?: string | null;
+  headers?: { [name: string]: string | string[] };
+  /** `serve()` sends a non-string body pre-stringified (key order preserved); the read path returns
+   * whatever shape was posted, and an absent body as an explicit `null` (no `skip_serializing_if`). */
+  body?: JsonValue | null;
   [key: string]: unknown;
 }
 

@@ -212,11 +212,13 @@ export interface InterceptHandle {
    *
    * The response is normalized to the engine's narrower `ServeStub` (issue #101): a non-string body
    * becomes compact JSON (`okJson({a:1})` sends `'{"a":1}'`), a numeric-string `statusCode` is
-   * coerced to a number, and `_mode: 'text'` plus unknown keys are dropped. What the engine cannot
-   * represent is refused rather than silently mangled — a multi-value header (joining would corrupt
-   * `Set-Cookie`), a binary body (the base64 would be served as literal text), and a `statusCode`
-   * outside the 100..999 the engine can render as a status line. Use `forward()` to an imposter when
-   * you need any of those, or `addRule()` to send a rule verbatim.
+   * coerced to a number, and `_mode: 'text'` plus unknown keys are dropped. A multi-value header
+   * (`string[]`) is sent as one line per value (engine >= 0.18.0). What the engine cannot represent,
+   * or would drop or merge with only a log line, is refused rather than silently mangled — a
+   * binary body (the base64 would be served as literal text), a `statusCode` outside 100..999, an
+   * invalid header name or value, and a second spelling of a header name. Use `forward()` to an
+   * imposter for a binary body or an out-of-range status (the imposter path validates and folds
+   * headers the same way), or `addRule()` to send a rule verbatim.
    *
    * Body key order follows your object; the imposter path re-serializes through Rust and emits
    * sorted keys, so the two differ byte-wise for a SUT that hashes or byte-asserts the body. */
