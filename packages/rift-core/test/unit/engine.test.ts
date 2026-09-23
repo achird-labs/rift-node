@@ -356,6 +356,25 @@ describe('issue #21 — RiftEngine facade over AdminApi', () => {
     expect(h.url).toBe('http://127.0.0.1:7950');
   });
 
+  it.each([
+    ['[::1]', 'http://[::1]:7951'],
+    ['::1', 'http://[::1]:7951'],
+    ['::', 'http://[::1]:7951'],
+    ['[::]', 'http://[::1]:7951'],
+  ])('handle.url brackets an IPv6 hostHint %s (issue #143)', async (hostHint, expected) => {
+    // `connect('http://[::1]:2525')` yields hostHint `[::1]` (WHATWG hostname keeps the brackets);
+    // spawn({ host: '::1' }) yields the bare form. The any-interface `::` maps to its loopback.
+    const engine = new Engine(new FakeAdminApi(), 'remote', { hostHint });
+    const h = await engine.create(imposter('s').port(7951));
+    expect(h.url).toBe(expected);
+  });
+
+  it('handle.url brackets an IPv6 imposter bind host when there is no hostHint (issue #143)', async () => {
+    const engine = new Engine(new FakeAdminApi(), 'remote', {});
+    const h = await engine.create(imposter('s').port(7952).host('::1'));
+    expect(h.url).toBe('http://[::1]:7952');
+  });
+
   it('engine.close() still closes the admin client when onClose throws', async () => {
     const admin = new FakeAdminApi();
     const engine = new Engine(admin, 'spawn', {

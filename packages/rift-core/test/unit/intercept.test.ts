@@ -927,6 +927,31 @@ describe('issue #11 — spawn transport availability + attach', () => {
     expect(handle.url).toBe('http://127.0.0.1:6900');
   });
 
+  it.each(['::1', '[::1]'])(
+    'with the spawn-time flag on IPv6 host %s: the attached handle URL is bracketed (issue #143)',
+    async (host) => {
+      // `spawnEngine` hands over `new URL(url).hostname`, which keeps the brackets; a caller's own
+      // `intercept({ host: '::1' })` is the bare form. Both must yield one dialable URL.
+      mockFetch(new Response('[]', { status: 200 }));
+      const engine = new Engine(connect('http://[::1]:2525'), 'spawn', {
+        interceptSpawn: { host, port: 6901 },
+      });
+      const handle = await engine.intercept();
+      expect(handle.port).toBe(6901);
+      expect(handle.url).toBe('http://[::1]:6901');
+    }
+  );
+
+  it('remote transport on an IPv6 admin URL: the attached handle URL is bracketed (issue #143)', async () => {
+    // `#startRemoteIntercept` derives the host from the admin URL's `hostname`, which keeps the
+    // brackets — a different path from the spawn-time `{host, port}` above.
+    mockFetch(new Response('[]', { status: 200 }));
+    const engine = new Engine(connect('http://[::1]:2525'), 'remote', {});
+    const handle = await engine.intercept({ port: 6902 });
+    expect(handle.port).toBe(6902);
+    expect(handle.url).toBe('http://[::1]:6902');
+  });
+
   it('flag passed but engine has no intercept listener (404) → actionable InterceptUnavailable, not a raw 404', async () => {
     mockFetch(new Response(JSON.stringify({ errors: [{ message: 'not found' }] }), { status: 404 }));
     const engine = new Engine(connect('http://127.0.0.1:2525'), 'spawn', {

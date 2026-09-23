@@ -51,6 +51,7 @@ import type { InterceptBackend, InterceptOptions } from './intercept/types.js';
 import { RemoteInterceptBackend } from './intercept/remote-backend.js';
 import { forwardRule, redirectRule, serveRule } from './intercept/rules.js';
 import { makeJsonSafeReplacer, stringifyJsonSafe } from './model/serialize.js';
+import { hostForUrl } from './host.js';
 import { extractEngineVersion, isBelowVersion, parseSemver } from './version.js';
 import { assertInterceptAuthOption } from './apikey.js';
 
@@ -150,7 +151,8 @@ export interface SpaceHandle {
 
 export interface ImposterHandle extends AsyncDisposable {
   readonly port: number;
-  /** `${protocol}://${reachableHost}:${port}` — a `0.0.0.0`/`::`/empty bind host maps to 127.0.0.1. */
+  /** `${protocol}://${reachableHost}:${port}` — a `0.0.0.0`/empty bind host maps to `127.0.0.1`, `::` to
+   * `[::1]`, and any IPv6 literal is bracketed. */
   readonly url: string;
   readonly name?: string;
   readonly protocol: 'http' | 'https';
@@ -283,7 +285,8 @@ function normalizeProtocol(protocol: unknown): 'http' | 'https' {
 function normalizeHost(host: string | undefined): string {
   if (host === undefined || host === '') return '127.0.0.1';
   const bare = host.startsWith('[') && host.endsWith(']') ? host.slice(1, -1) : host;
-  if (bare === '0.0.0.0' || bare === '::') return '127.0.0.1';
+  if (bare === '0.0.0.0') return '127.0.0.1';
+  if (bare === '::') return '::1';
   return bare;
 }
 
@@ -504,7 +507,7 @@ class ImposterHandleImpl implements ImposterHandle {
     this.protocol = normalizeProtocol(imp.protocol);
     this.name = imp.name;
     this.recordingEnabled = imp.recordRequests === true;
-    this.url = `${this.protocol}://${reachableHost(hostHint, imp.host)}:${this.port}`;
+    this.url = `${this.protocol}://${hostForUrl(reachableHost(hostHint, imp.host))}:${this.port}`;
   }
 
   async addStub(stub: AnyStubBuilder | Stub, opts?: { index?: number }): Promise<void> {

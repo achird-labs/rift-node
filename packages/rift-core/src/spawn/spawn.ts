@@ -18,11 +18,12 @@ import {
   MIN_INTERCEPT_AUTH_ENGINE,
 } from '../apikey.js';
 import type { InterceptOptions } from '../intercept/types.js';
+import { hostForUrl } from '../host.js';
 import { isAtLeastVersion } from '../version.js';
 import { resolveBinary, type EnvRecord } from './resolve.js';
 
 // Must be an IP literal: the engine parses `--host` into a socket address, so a hostname
-// (e.g. `localhost`) aborts startup with "invalid socket address syntax".
+// (e.g. `localhost`) aborts startup with "--host localhost is not an IP literal".
 const DEFAULT_HOST = '127.0.0.1';
 const DEFAULT_STARTUP_TIMEOUT_MS = 30000;
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 5000;
@@ -164,8 +165,9 @@ const defaultSpawnDeps: SpawnDeps = { spawn: spawnProcess, resolveBinary, probeV
 export interface SpawnOptions {
   /** Admin port to bind. Defaults to an OS-assigned ephemeral port. */
   port?: number;
-  /** Bind address, passed to the engine's `--host`. Must be an IP literal (the engine rejects
-   * hostnames with "invalid socket address syntax"). Default `127.0.0.1`. */
+  /** Bind address, passed to the engine's `--host`. Must be an IP literal — the engine refuses a
+   * hostname with "--host <value> is not an IP literal". An IPv6 literal (`::1`, `[::1]`) needs
+   * engine >= 0.18.0; the SDK brackets it wherever it builds a URL. Default `127.0.0.1`. */
   host?: string;
   loglevel?: string;
   /** Engine version to resolve when the binary isn't already local. */
@@ -424,7 +426,7 @@ export async function spawn(opts: SpawnOptions = {}, deps: SpawnDeps = defaultSp
     stderr += data.toString();
   });
 
-  const url = `http://${host}:${port}`;
+  const url = `http://${hostForUrl(host)}:${port}`;
 
   try {
     await Promise.race([waitForAdmin(url, startupTimeoutMs), watchForEarlyExit(proc, () => stderr)]);
