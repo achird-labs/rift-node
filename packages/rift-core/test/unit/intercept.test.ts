@@ -19,7 +19,7 @@ import { Engine, type AdminApi, type ImposterHandle } from '../../src/engine.js'
 import { ok, okJson, created, req } from '../../src/dsl/index.js';
 import type { ResponseBuilder } from '../../src/dsl/response.js';
 import { InterceptUnavailable, InvalidDefinition, WireValidationError } from '../../src/errors.js';
-import type { InterceptRule, IsResponse } from '../../src/model/index.js';
+import type { InterceptRule, IsResponse, JsonValue, ServeStub } from '../../src/model/index.js';
 import type { InterceptBackend } from '../../src/intercept/types.js';
 import { buildSpawnArgs } from '../../src/spawn/index.js';
 import { connect } from '../../src/remote/client.js';
@@ -200,7 +200,7 @@ describe('issue #101 — serve() normalizes the response into the engine ServeSt
     await expect(handle.serve('x.example.com', response)).rejects.toThrow(InvalidDefinition);
   }
 
-  it('stringifies an object body — engine ServeStub.body is Option<String>', async () => {
+  it('stringifies an object body — key order follows the caller, the engine would sort it', async () => {
     expect(await serveWire(okJson({ stub: true }))).toEqual({
       statusCode: 200,
       headers: { 'Content-Type': 'application/json' },
@@ -263,8 +263,78 @@ describe('issue #101 — serve() normalizes the response into the engine ServeSt
     await serveRejects({ _mode: 'base64' as unknown as 'binary' });
   });
 
-  it('rejects a multi-value header instead of silently joining it', async () => {
-    await serveRejects({ headers: { 'Set-Cookie': ['a=1', 'b=2'] } });
+  it('sends a multi-value header as an array — one line per value on engine >= 0.18.0 (issue #144)', async () => {
+    expect(await serveWire({ headers: { 'Set-Cookie': ['a=1', 'b=2'], 'X-One': ['only'] } })).toEqual({
+      headers: { 'Set-Cookie': ['a=1', 'b=2'], 'X-One': ['only'] },
+    });
+  });
+
+  it('rules() reads array headers and an object body back typed (issue #144)', async () => {
+    const fake = new FakeInterceptBackend();
+    fake.listResult = JSON.stringify([
+      { host: 'x.example.com', action: { serve: { statusCode: 200, headers: { 'Set-Cookie': ['a=1', 'b=2'] }, body: { a: 1 } } } },
+    ]);
+    const { engine } = engineOf(fake);
+    const handle = await engine.intercept();
+    const [rule] = await handle.rules();
+    const serve = (rule?.action as { serve: ServeStub }).serve;
+    const cookies: string | string[] | undefined = serve.headers?.['Set-Cookie'];
+    expect(cookies).toEqual(['a=1', 'b=2']);
+    const body: JsonValue | null | undefined = serve.body;
+    expect(body).toEqual({ a: 1 });
+  });
+
+  it('refuses a case-variant duplicate name — the json()+header() back door (issue #144)', async () => {
+    // `json()` pre-sets `Content-Type`; a lowercase re-set used to pass and the engine served the
+    // header twice, which is exactly the multi-value outcome the SDK refused to allow explicitly.
+    const fake = new FakeInterceptBackend();
+    const { engine } = engineOf(fake);
+    const handle = await engine.intercept();
+    const attempt = handle.serve('x.example.com', okJson({ a: 1 }).header('content-type', 'text/plain'));
+    await expect(attempt).rejects.toThrow(InvalidDefinition);
+    await expect(attempt).rejects.toThrow(/`content-type` is already given as `Content-Type`/);
+    expect(fake.addRulesCalls).toHaveLength(0);
+  });
+
+  it('refuses three spellings with one report naming the first collision (issue #144)', async () => {
+    const fake = new FakeInterceptBackend();
+    const { engine } = engineOf(fake);
+    const handle = await engine.intercept();
+    const attempt = handle.serve('x.example.com', { headers: { 'X-A': '1', 'X-Other': '2', 'x-a': '3', 'X-a': '4' } });
+    await expect(attempt).rejects.toThrow(/`x-a` is already given as `X-A`/);
+    await expect(attempt).rejects.not.toThrow(/X-a/);
+  });
+
+  it('names the first-seen casing when the lowercase spelling came first (issue #144)', async () => {
+    const fake = new FakeInterceptBackend();
+    const { engine } = engineOf(fake);
+    const handle = await engine.intercept();
+    await expect(handle.serve('x.example.com', { headers: { 'x-a': '1', 'X-A': '2' } })).rejects.toThrow(
+      /`X-A` is already given as `x-a`/
+    );
+  });
+
+  it('refuses an invalid header name the engine would skip with only a log line (issue #144)', async () => {
+    await serveRejects({ headers: { 'X Bad': '1' } });
+    await serveRejects({ headers: { ' x': '1' } });
+    await serveRejects({ headers: { 'x:y': '1' } });
+    await serveRejects({ headers: { '': '1' } });
+  });
+
+  it('refuses a non-string array element and an empty array (issue #144)', async () => {
+    await serveRejects({ headers: { 'X-A': ['a', 1] as unknown as string[] } });
+    await serveRejects({ headers: { 'X-A': [] } });
+  });
+
+  it('refuses a control character in a value but allows HTAB (issue #144)', async () => {
+    await serveRejects({ headers: { 'X-A': 'a\u0000b' } });
+    await serveRejects({ headers: { 'X-A': ['ok', 'bad\u007f'] } });
+    await serveRejects({ headers: { 'X-A': 'split\r\nInjected: yes' } });
+    expect(await serveWire({ headers: { 'X-A': 'a\tb' } })).toEqual({ headers: { 'X-A': 'a\tb' } });
+  });
+
+  it('refuses an engine-managed name inside an array-valued entry too (issue #144)', async () => {
+    await serveRejects({ headers: { Connection: ['close', 'keep-alive'] } });
   });
 
   it('rejects binary mode rather than serving the base64 as literal text', async () => {

@@ -1,7 +1,7 @@
 import { InvalidDefinition } from '../errors.js';
 
 /** ASCII-only case fold, matching the engine's `eq_ignore_ascii_case` on header names. */
-function foldAscii(name: string): string {
+export function foldAsciiHeaderName(name: string): string {
   return name.replace(/[A-Z]/g, (c) => c.toLowerCase());
 }
 
@@ -24,13 +24,13 @@ export function assertSingleValuedHeaderNames(
 ): void {
   const seen = new Map<string, string>();
   for (const name of Object.keys(headers)) {
-    const first = seen.get(foldAscii(name));
+    const first = seen.get(foldAsciiHeaderName(name));
     if (first !== undefined && first !== name) {
       throw new InvalidDefinition(
         `header \`${name}\` is already given as \`${first}\`; ${field} is single-valued and names each header once ` +
           `(engine 0.18.0 refuses the second spelling with a 400). Use one spelling in ${builder}.`
       );
     }
-    seen.set(foldAscii(name), name);
+    seen.set(foldAsciiHeaderName(name), name);
   }
 }

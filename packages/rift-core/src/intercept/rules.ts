@@ -5,6 +5,7 @@
  */
 
 import type { InterceptRule, IsResponse, JsonValue, Predicate, ServeStub } from '../model/index.js';
+import { foldAsciiHeaderName } from '../dsl/header-names.js';
 import { InvalidDefinition } from '../errors.js';
 import { makeJsonSafeReplacer } from '../model/serialize.js';
 import { ResponseBuilder } from '../dsl/response.js';
@@ -171,9 +172,9 @@ function toForwardPort(to: ImposterHandle | number): number {
 }
 
 /**
- * The engine writes the status line as `format!("HTTP/1.1 {} {}")` with a reason phrase of `""` for
- * anything outside hyper's `StatusCode::from_u16` (`intercept.rs`), so a code it cannot render
- * yields a malformed HTTP response instead of a serde error — the same wrong-but-quiet failure this
+ * Since engine 0.18.0 a code outside hyper's `StatusCode::from_u16` is served as a 500 with a log
+ * line (`intercept.rs`); before, it yielded a malformed status line. Either way it is not the
+ * response asked for and reaches the SDK caller as nothing — the same wrong-but-quiet failure this
  * normalizer exists to prevent, merely relocated to the SUT's parser. Hence the bound is what HTTP
  * can express, not what the `u16` field can hold.
  */
@@ -203,43 +204,80 @@ function toStatusCode(statusCode: unknown): number {
  * serves happily, so it must track that function rather than the spec. */
 const ENGINE_MANAGED_HEADERS = new Set(['host', 'connection', 'content-length', 'transfer-encoding']);
 
-function toHeaders(headers: NonNullable<IsResponse['headers']>): Record<string, string> {
+/** RFC 9110 `token` — what hyper's `HeaderName::try_from` accepts. */
+const HEADER_NAME_TOKEN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+/** Every control character except HTAB, plus DEL — what `HeaderValue::try_from` refuses. Spelled
+ * as a code-point scan rather than a regex because a control-character class trips `no-control-regex`. */
+function hasForbiddenHeaderValueChar(value: string): boolean {
+  for (const ch of value) {
+    const code = ch.codePointAt(0) ?? 0;
+    if ((code < 0x20 && code !== 0x09) || code === 0x7f) return true;
+  }
+  return false;
+}
+
+function toHeaderValue(name: string, value: unknown, inArray: boolean): string {
+  if (typeof value !== 'string') {
+    throw new InvalidDefinition(
+      `intercept serve() ${inArray ? 'each value of header' : 'header'} "${name}" must be a string, got ${typeof value}`
+    );
+  }
+  if (hasForbiddenHeaderValueChar(value)) {
+    throw new InvalidDefinition(
+      `intercept serve() header "${name}" contains a control character (CR, LF, NUL, DEL, ...): the engine drops that value with only a log line — for CR/LF that is also the response-splitting guard. Remove the control characters.`
+    );
+  }
+  return value;
+}
+
+function toHeaders(headers: NonNullable<IsResponse['headers']>): Record<string, string | string[]> {
   // Null-prototype: on a plain object `out[name] = value` for the single name `__proto__` hits the
   // prototype setter instead of creating an own property, so that header would vanish here without
   // an error — reachable whenever the caller's headers came from `JSON.parse`.
-  const out = Object.create(null) as Record<string, string>;
+  const out = Object.create(null) as Record<string, string | string[]>;
+  const seen = new Map<string, string>();
   for (const [name, value] of Object.entries(headers)) {
-    if (Array.isArray(value)) {
+    // Every class below is altered engine-side with at most a `tracing::warn!` the SDK caller never
+    // sees — a malformed name skips the header, a malformed value drops that value, a managed name
+    // is stripped outright, and a second spelling of a name is silently merged into the first
+    // (rift#1039) so the header goes out twice when the caller meant once. Without these guards
+    // serve() succeeds and the response is not the one asked for. forward() is no escape hatch:
+    // the imposter path applies the same validation and fold, and is_hop_by_hop runs on the
+    // request-forward and response-relay legs too.
+    if (!HEADER_NAME_TOKEN.test(name)) {
       throw new InvalidDefinition(
-        `intercept serve() cannot send the multi-value header "${name}": the engine's serve stub holds one value per header, and joining them would corrupt headers like Set-Cookie. Send a single string, or forward() to an imposter.`
+        `intercept serve() header name ${JSON.stringify(name)} is not a valid HTTP header name (letters, digits and !#$%&'*+-.^_\`|~ only, no spaces): the engine skips the header with only a log line.`
       );
     }
-    if (typeof value !== 'string') {
-      throw new InvalidDefinition(`intercept serve() header "${name}" must be a string, got ${typeof value}`);
-    }
-    // Both classes below are dropped engine-side — the managed names with no trace at all (a bare
-    // `continue`), CR/LF with a `tracing::warn!` the SDK caller never sees. Without these guards
-    // serve() succeeds and the header simply never arrives. forward() is no escape hatch:
-    // is_hop_by_hop is applied on the request-forward and response-relay legs too.
     if (ENGINE_MANAGED_HEADERS.has(name.toLowerCase())) {
       throw new InvalidDefinition(
-        `intercept serve() cannot send the header "${name}": the engine's intercept proxy manages connection framing itself (it always computes Content-Length and Connection: close) and silently drops this header. Remove it from the response.`
+        `intercept serve() cannot send the header "${name}": the engine's intercept proxy manages Content-Length and the Connection header itself and silently drops this header. Remove it from the response.`
       );
     }
-    if (/[\r\n]/.test(name) || /[\r\n]/.test(value)) {
+    const first = seen.get(foldAsciiHeaderName(name));
+    if (first !== undefined) {
       throw new InvalidDefinition(
-        `intercept serve() header "${name}" contains CR or LF, which the engine silently drops to prevent header/response splitting. Remove the control characters.`
+        `intercept serve() header \`${name}\` is already given as \`${first}\`: the engine merges the spellings into one multi-value header and serves it twice. Use one spelling, and an array for multiple values.`
       );
     }
-    out[name] = value;
+    seen.set(foldAsciiHeaderName(name), name);
+    if (Array.isArray(value)) {
+      if (value.length === 0) {
+        throw new InvalidDefinition(`intercept serve() header "${name}" is an empty array, which would send no header at all.`);
+      }
+      out[name] = value.map((v) => toHeaderValue(name, v, true));
+    } else {
+      out[name] = toHeaderValue(name, value, false);
+    }
   }
   return out;
 }
 
-/** A string body is the engine's own contract and is sent as-is; anything else becomes compact JSON.
- * Key order follows the object's own — the engine's imposter path re-serializes through
- * `serde_json::Map` (a `BTreeMap`, since `preserve_order` is off) and so emits sorted keys, which a
- * SUT that hashes or byte-asserts the body will notice.
+/** A string body is sent as-is; anything else becomes compact JSON here, on purpose. Since engine
+ * 0.18.0 `serve.body` accepts any JSON value (rift#933), but the engine renders a non-string body
+ * through `serde_json::Map` (a `BTreeMap`, since `preserve_order` is off) and so emits sorted keys;
+ * pre-stringifying keeps the caller's key order, which a SUT that hashes or byte-asserts the body
+ * will notice. The read path (`rules()`) returns whatever shape was posted.
  *
  * Serialized through the wire model's own {@link makeJsonSafeReplacer} so this path refuses exactly what
  * that one refuses (issue #106) — the thrown `WireValidationError` already names the offending key,
@@ -264,10 +302,10 @@ function toBody(body: JsonValue): string {
 /**
  * Narrows a Mountebank-shaped {@link IsResponse} to the engine's {@link ServeStub}.
  *
- * The two shapes disagree on every field — `body` (`JsonValue` vs `Option<String>`), `statusCode`
- * (`number | string` vs `u16`) and `headers` (`string | string[]` values vs `String`) — and the
- * engine parses rules through an untagged enum, so any mismatch surfaces as an opaque "did not match
- * any variant of RuleOrRules" instead of naming the offending field (issue #101).
+ * The engine parses rules through an untagged enum, so a field out of contract (a `statusCode`
+ * that is not a number or numeric string, a non-string header value, a body it cannot read)
+ * surfaces as an opaque "did not match any variant of RuleOrRules" instead of naming the offending
+ * field (issue #101); this normalizer names it first.
  *
  * Builds a fresh object, so `_mode: 'text'` and unknown keys are dropped rather than forwarded and
  * the caller's response is never mutated. `addRule()` remains the verbatim escape hatch.

@@ -75,6 +75,26 @@ All notable changes to `@rift-vs/rift` are documented here. This project adheres
 
 ### Fixed
 
+- **Intercept `serve()` follows the engine 0.18.0 serve contract** (issue #144). The engine's serve
+  stub now takes a string *or an array* per header (one line per value, rift#936) and any JSON
+  body (rift#933); the normalizer still enforced the 0.17 shape, so
+  `serve(host, { headers: { 'Set-Cookie': ['a=1', 'b=2'] } })` was refused and the caller sent to
+  `forward()`. Arrays now reach the wire as arrays, `ServeStub.headers` is typed
+  `string | string[]`, and `ServeStub.body` is `JsonValue | null` on the read path (`rules()`
+  already returned those shapes; the type lied). A non-string body is still pre-stringified on the
+  way out, deliberately: the engine renders an object body with sorted keys, and the caller's key
+  order is what a SUT that hashes the body expects. Multi-value headers need engine >= 0.18.0; an
+  older engine answers the array form with an opaque serde error.
+
+  Three things the engine drops (with a log line) or merges (silently) are refused instead: a second
+  spelling of a header name — `okJson().header('content-type', …)` used to pass and the engine
+  served `Content-Type` twice, the very multi-value outcome the SDK refused to allow explicitly
+  (rift#1039; the same bug was fixed in rift-scala#152) — a header name that is not an HTTP token,
+  and a value carrying any control character other than HTAB (previously only CR/LF; the engine
+  drops just that value). The stale
+  "always computes Content-Length and Connection: close" wording is gone: tunnels are keep-alive
+  since rift#993, though `Connection` is still stripped.
+
 - **A second spelling of a header name in `injectHeader()` or `Fault.error({ headers })` is refused
   locally** (issue #145). Both fields are single-valued on the wire, and engine 0.18.0 refuses a
   case-variant repeat (`x-trace` beside `X-Trace`) with a 400 naming both spellings (rift#1050); older

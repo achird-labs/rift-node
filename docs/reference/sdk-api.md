@@ -641,7 +641,8 @@ interface InterceptHandle {
 ```
 
 `serve()` normalization (issue #101). The engine's serve action is a `ServeStub`
-(`statusCode: u16`, `headers: String -> String`, `body: Option<String>`), which is narrower than the
+(`statusCode: u16`, `headers: String -> String | String[]` — one line per value, `body: any JSON`;
+engine >= 0.18.0), which is narrower than the
 Mountebank-shaped `IsResponse` the DSL builds — so `serve()` converts rather than passing it through:
 
 | Input | Result |
@@ -654,15 +655,17 @@ Mountebank-shaped `IsResponse` the DSL builds — so `serve()` converts rather t
 | `_behaviors.*` (`latency`, `repeat`, `decorate`, `shellTransform`, `copy`, `lookup`, …) | **throws `InvalidDefinition`** naming each one — the serve action cannot run behaviors |
 | `_rift.*` (`templated`, `script`, `fault.latency`/`error`/`tcp`) | **throws `InvalidDefinition`** naming each one — the serve action carries no `_rift` extension |
 | any other unknown key | **throws `InvalidDefinition`** — it would otherwise be dropped in silence |
-| multi-value header (`string[]`) | **throws `InvalidDefinition`** — joining would corrupt `Set-Cookie` |
+| multi-value header (`string[]`) | sent as one header line per value (engine >= 0.18.0; an older engine answers with an opaque serde error). An empty array **throws** — it would send nothing |
+| a second spelling of a header name (`Content-Type` + `content-type`, e.g. `okJson().header('content-type', …)`) | **throws `InvalidDefinition`** naming both spellings — the engine merges them into one multi-value header and serves it twice |
+| header name that is not an HTTP token (`'X Bad'`, `' x'`) | **throws `InvalidDefinition`** — the engine skips the header with only a log line |
 | `_mode: 'binary'` or unrecognized | **throws `InvalidDefinition`** — the base64 would be served as literal text |
 | `statusCode` outside `100..999` | **throws `InvalidDefinition`** — the engine cannot render it as a status line |
 | `body` containing `NaN`/`Infinity`/`-Infinity` | **throws `InvalidDefinition`** locating the offending value — `JSON.stringify` would silently emit `null` |
 | `Host`, `Connection`, `Content-Length`, `Transfer-Encoding` (any case) | **throws `InvalidDefinition`** — the engine's proxy manages connection framing and drops these |
-| header name or value containing CR/LF | **throws `InvalidDefinition`** — the engine drops these to prevent response splitting |
+| header value containing a control character (CR/LF, NUL, DEL, …; HTAB is fine) | **throws `InvalidDefinition`** — the engine drops that value with only a log line; for CR/LF that is the response-splitting guard |
 
-Use `forward()` to an imposter when you need a multi-value header, a binary body, or a status code
-outside `100..999`, or `addRule()` to send a rule verbatim. A non-finite number has no JSON form at
+Use `forward()` to an imposter when you need a binary body or a status code outside
+`100..999`, or `addRule()` to send a rule verbatim. A non-finite number has no JSON form at
 all, so no escape hatch applies there — send it as a string if the SUT expects one. Body key order
 follows your object; the imposter path re-serializes through Rust and emits sorted keys, so the two
 differ byte-wise (equivalent JSON) if a SUT hashes the body.
@@ -689,8 +692,8 @@ the engine as a `null` you never wrote (a `null` the transport could not catch a
 re-parses the serialized rule). It still does not range-check a finite `statusCode`. Note the four
 names above are exactly what the engine manages — `Keep-Alive`, `TE` and `Upgrade` are RFC 7230
 hop-by-hop but are **not** stripped, so
-`serve()` sends them and the SUT receives them. The engine still appends its own `Content-Length`
-and `Connection: close` to every served response.
+`serve()` sends them and the SUT receives them. The engine manages `Content-Length` and the
+`Connection` header itself on every served response (tunnels are keep-alive since 0.18.0).
 
 Per-transport availability (documented, typed):
 - **embedded** — `engine.intercept(opts)` calls `rift_start_intercept` (idempotent handle reuse).
