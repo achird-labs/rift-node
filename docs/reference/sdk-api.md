@@ -193,7 +193,39 @@ interface ImposterHandle extends AsyncDisposable {
   disable(): Promise<void>;
   clearProxyRecordings(): Promise<void>;   // DELETE savedProxyResponses
   toJson(opts?: { replayable?: boolean; removeProxies?: boolean }): Promise<wire.Imposter>;
+      // the read shape differs from what the DSL posts (engine >= 0.18.0): a response's behaviors come
+      // back as an ordered `behaviors` array plus a response-level `repeat`, not `_behaviors`; both
+      // are typed on wire.StubResponse and round-trip through fromJson unchanged
   delete(): Promise<void>;                 // [Symbol.asyncDispose] delegates here (idempotent)
+}
+```
+
+Reading a `toJson()` result back with the 0.18.0 shapes typed (`wire.StubResponse.behaviors`,
+`.repeat`, `wire.RiftResponseExtension.dataset`, `wire.RiftImposterConfig.sequencing`):
+
+<!-- docs:embed read-back-shapes -->
+```ts
+import type { wire } from '@rift-vs/rift';
+
+/** The engine's own count for a response, whichever spelling the document uses. */
+export function repeatOf(response: wire.StubResponse): number {
+  // A response-level `repeat` wins over `_behaviors.repeat`; the engine never writes `0`.
+  return response.repeat ?? response._behaviors?.repeat ?? 1;
+}
+
+/** The steps a read-back response runs, in execution order. */
+export function stepsOf(response: wire.StubResponse): string[] {
+  return (response.behaviors ?? []).flatMap((step) => Object.keys(step));
+}
+
+/** Where a dataset-backed lookup stores its row, or `undefined` when the response has none. */
+export function datasetTargetOf(response: wire.StubResponse): string | undefined {
+  const binding = response._rift?.dataset;
+  return binding === undefined ? undefined : `${binding.name}[${binding.keyColumn}] -> ${binding.into}`;
+}
+
+export function sequencingModeOf(imposter: wire.Imposter): string | undefined {
+  return imposter._rift?.sequencing?.mode;
 }
 ```
 

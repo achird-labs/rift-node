@@ -43,6 +43,67 @@ describe('wire model — round-trip over rift example fixtures', () => {
   }
 });
 
+describe('wire model — 0.18.0 read-path shapes (issue #150)', () => {
+  it('preserves the 0.18.0 read shape — behaviors[] + response-level repeat — byte-for-byte', () => {
+    // What GET /imposters writes since engine 0.18.0: an ordered `behaviors` array, one element per
+    // step, and `repeat` lifted to the response — not the `_behaviors` object the DSL posts.
+    const imposter: Imposter = {
+      port: 4545,
+      protocol: 'http',
+      stubs: [
+        {
+          responses: [
+            {
+              is: { statusCode: 200 },
+              repeat: 3,
+              behaviors: [{ wait: 5 }, { copy: { from: 'path', into: '${A}', using: { method: 'regex', selector: '.*' } } }],
+            },
+          ],
+        },
+      ],
+    };
+    expect(toWireJson(fromJson(imposter))).toEqual(imposter);
+    const [resp] = (fromJson(imposter) as Imposter).stubs?.[0]?.responses ?? [];
+    expect(resp?.repeat).toBe(3);
+    expect(resp?.behaviors?.[0]).toEqual({ wait: 5 });
+  });
+
+  it('preserves the pre-0.18 read shape with {repeat} inside the array', () => {
+    const original = { port: 4545, protocol: 'http', stubs: [{ responses: [{ is: { statusCode: 200 }, behaviors: [{ repeat: 2 }, { wait: 5 }] }] }] };
+    expect(toWireJson(fromJson(original))).toEqual(original);
+  });
+
+  it('preserves the _rift.dataset and _rift.sequencing carriers', () => {
+    const imposter: Imposter = {
+      port: 4545,
+      protocol: 'http',
+      _rift: { sequencing: { mode: 'ordered', window: 8 } },
+      stubs: [
+        {
+          responses: [
+            {
+              is: { statusCode: 200 },
+              _rift: {
+                dataset: {
+                  name: 'customers',
+                  version: 3,
+                  key: { from: 'path', using: { method: 'regex', selector: '/c/(\\d+)' } },
+                  keyColumn: 'id',
+                  into: '${ROW}',
+                },
+              },
+            },
+          ],
+        },
+      ],
+    };
+    expect(toWireJson(fromJson(imposter))).toEqual(imposter);
+    const parsed = fromJson(imposter) as Imposter;
+    expect(parsed._rift?.sequencing?.mode).toBe('ordered');
+    expect(parsed.stubs?.[0]?.responses?.[0]?._rift?.dataset?.keyColumn).toBe('id');
+  });
+});
+
 describe('wire model — port preservation (ledger port-clobber regression)', () => {
   it('preserves an explicit port verbatim through fromJson→toWireJson', () => {
     const cfg = fromJson('{"imposters":[{"port":4545,"protocol":"http","stubs":[]}]}') as ImpostersConfig;
