@@ -23,6 +23,15 @@ export interface RecordedRequest {
   from: string;
   /** RFC3339. */
   timestamp: string;
+  /** The status code the request was answered with (engine >= 0.18.0). `undefined` when not
+   * recorded: a request still in flight when the journal was read, one whose handling errored, or
+   * an older engine. */
+  status?: number;
+  /** Time to answer, in ms (engine >= 0.18.0). `0` is a real reading; `undefined` means not recorded. */
+  latencyMs?: number;
+  /** The node that answered. Set only by a clustered journal — always `undefined` against a single
+   * engine, including one the SDK spawns. */
+  node?: string;
   /** The untouched wire object, for anything not lifted onto the typed shape above. */
   raw: WireRecordedRequest;
 }
@@ -88,6 +97,9 @@ export function toRecordedRequest(raw: WireRecordedRequest): RecordedRequest {
     body: raw.body,
     from: raw.request_from ?? '',
     timestamp: raw.timestamp ?? '',
+    status: raw.status,
+    latencyMs: raw.latencyMs,
+    node: raw.node,
     raw,
   };
 }

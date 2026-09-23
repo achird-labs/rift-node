@@ -579,6 +579,10 @@ interface RecordedRequest {
   body?: unknown;                 // string, or parsed JSON when the engine recorded it as such
   from: string;                   // wire: request_from (client addr)
   timestamp: string;              // RFC3339
+  status?: number;                // how it was answered (engine >= 0.18.0); undefined = not recorded
+                                  // (still in flight, handling errored, or an older engine)
+  latencyMs?: number;             // ms; 0 is a real reading, undefined = not recorded
+  node?: string;                  // set only by a clustered journal; always undefined on a single engine
   raw: wire.RecordedRequest;      // untouched wire object
 }
 type RequestMatch = StubBuilder | wire.Predicate | wire.Predicate[];

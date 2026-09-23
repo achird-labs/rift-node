@@ -441,6 +441,29 @@ describe('predicatesOf / toRecordedRequest', () => {
     expect(predicatesOf([p, p])).toEqual([p, p]);
   });
 
+  it('toRecordedRequest lifts status, latencyMs and node when present (issue #148)', () => {
+    // Engine >= 0.18.0 records how each request was answered (rift#364). `latencyMs: 0` is a real
+    // reading and must not be defaulted away.
+    const r = toRecordedRequest({
+      method: 'GET',
+      path: '/x',
+      status: 503,
+      latencyMs: 0,
+      node: 'node-a',
+    });
+    expect(r.status).toBe(503);
+    expect(r.latencyMs).toBe(0);
+    expect(r.node).toBe('node-a');
+  });
+
+  it('toRecordedRequest leaves the outcome fields undefined when the journal has none (issue #148)', () => {
+    // A request still in flight when the journal was read, one whose handling errored, or an engine < 0.18.0.
+    const r = toRecordedRequest({ method: 'GET', path: '/x' });
+    expect(r.status).toBeUndefined();
+    expect(r.latencyMs).toBeUndefined();
+    expect(r.node).toBeUndefined();
+  });
+
   it('toRecordedRequest maps request_from -> from and preserves raw', () => {
     const raw: WireRecordedRequest = {
       method: 'GET',
@@ -593,6 +616,17 @@ describe('ImposterHandle.recorded / clearRecorded / verify', () => {
     const result = await h.recorded({ flowId: 'flow-42' });
     expect(admin.getSavedRequestsCalls).toEqual([{ port: 9100, match: ['flow_id=flow-42'] }]);
     expect(result).toEqual([toRecordedRequest(admin.savedRequests[0]!)]);
+  });
+
+  it('recorded() carries the 0.18.0 outcome fields through to the caller (issue #148)', async () => {
+    const admin = new FakeAdminApi();
+    admin.savedRequests = [wireRecorded({ status: 503, latencyMs: 12, node: 'n1' }), wireRecorded({})];
+    const h = await engineOf(admin).create(imposter('s').port(9105).record());
+    const [answered, pending] = await h.recorded();
+    expect(answered?.status).toBe(503);
+    expect(answered?.latencyMs).toBe(12);
+    expect(answered?.node).toBe('n1');
+    expect(pending?.status).toBeUndefined();
   });
 
   it('recorded({ match }) fetches all (no server-side match) and filters client-side', async () => {

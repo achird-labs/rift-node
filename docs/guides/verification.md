@@ -46,7 +46,12 @@ await users.clearRecorded();                               // DELETE savedReques
 
 Each `RecordedRequest` is the mapped, ergonomic shape (`method`, `path`, `query`, `headers`,
 `body`, `from`, `timestamp`), plus `raw` — the untouched wire object — for anything not lifted
-onto the typed fields.
+onto the typed fields. On engine ≥ 0.18.0 it also carries how the request was answered: `status`
+and `latencyMs`. They are `undefined` when not recorded — a request still in flight when the
+journal was read, one whose handling errored, or an older engine — and `latencyMs: 0` is a real
+reading, so test for `undefined`, not falsiness. `node` names the answering node and is set only
+by a clustered journal; against a single engine, including one the SDK spawns, it is always
+`undefined`.
 
 ## Live iteration: `requests()`
 
