@@ -22,7 +22,9 @@
  * The same applies to the CONTAINERS that keep their payload in internal slots `JSON.stringify`
  * cannot reach — `Map`, `Set`, `WeakMap`, `WeakSet`, `RegExp`, `Promise`, `ArrayBuffer`,
  * `SharedArrayBuffer` and `DataView` — which lose every value rather than one and so are refused
- * too (issue #126). Two neighbours are deliberately NOT in that set, because they lose nothing or
+ * too (issue #126), as are the Node >= 20 host objects of the same shape — `Headers`,
+ * `URLSearchParams`, the fetch bodies, `AbortController`/`AbortSignal`, `WeakRef` (issue #132).
+ * Two neighbours are deliberately NOT in that set, because they lose nothing or
  * lose it visibly: an `Error`'s enumerable own properties do serialize (only the non-enumerable
  * `message` and `stack` are lost), and a typed-array VIEW such as `Uint8Array` serializes as an
  * index-keyed object. Note the set is an explicit list rather than the rule "renders as `{}`" —
@@ -41,11 +43,15 @@ const BARE_IDENTIFIER = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
  * The name of the built-in `value` is an instance of, for the containers that keep their payload in
  * internal slots `JSON.stringify` cannot reach — otherwise `undefined`.
  *
- * Membership is this explicit list of ECMAScript built-ins, and deliberately NOT the rule "anything
- * that stringifies to `{}`". An ordinary class instance whose state is private fields or getters
- * renders as `{}` too, so that rule would refuse the plain domain objects callers legitimately send.
- * Web/host objects of the same shape (`Headers`, `URLSearchParams`) are left out for the converse
- * reason: including them makes the set depend on which globals the runtime happens to provide.
+ * Membership is this explicit list — ECMAScript built-ins, then the host objects of the same shape
+ * (`Headers`, `URLSearchParams`, the fetch bodies) — and deliberately NOT the rule "anything that
+ * stringifies to `{}`". An ordinary class instance whose state is private fields or getters renders
+ * as `{}` too, so that rule would refuse the plain domain objects callers legitimately send.
+ *
+ * Every host object listed is a global from Node 20, the package's `engines` floor, so the set is
+ * fixed by the support contract rather than by the runtime. The `typeof` guards exist because
+ * `--no-experimental-fetch` removes the fetch globals: a missing one must read as "not matched",
+ * not throw inside the replacer. `URL` is not here — it has a `toJSON`.
  *
  * The name is the matched built-in's, not `value.constructor.name`: a subclass is refused for the
  * same reason its base is, so it should read the same in the error, and `constructor` is not
@@ -67,6 +73,15 @@ function slotBackedBuiltinName(value: object): string | undefined {
   if (value instanceof ArrayBuffer) return 'ArrayBuffer';
   if (value instanceof SharedArrayBuffer) return 'SharedArrayBuffer';
   if (value instanceof DataView) return 'DataView';
+  if (typeof Headers !== 'undefined' && value instanceof Headers) return 'Headers';
+  if (typeof URLSearchParams !== 'undefined' && value instanceof URLSearchParams) return 'URLSearchParams';
+  if (typeof FormData !== 'undefined' && value instanceof FormData) return 'FormData';
+  if (typeof Blob !== 'undefined' && value instanceof Blob) return 'Blob';
+  if (typeof Request !== 'undefined' && value instanceof Request) return 'Request';
+  if (typeof Response !== 'undefined' && value instanceof Response) return 'Response';
+  if (typeof AbortController !== 'undefined' && value instanceof AbortController) return 'AbortController';
+  if (typeof AbortSignal !== 'undefined' && value instanceof AbortSignal) return 'AbortSignal';
+  if (typeof WeakRef !== 'undefined' && value instanceof WeakRef) return 'WeakRef';
   return undefined;
 }
 

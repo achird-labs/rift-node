@@ -522,6 +522,17 @@ describe('wire model — built-ins JSON.stringify would emit as {} (issue #126)'
       ['ArrayBuffer', new ArrayBuffer(8)],
       ['SharedArrayBuffer', new SharedArrayBuffer(8)],
       ['DataView', new DataView(new ArrayBuffer(8))],
+      // Host objects (issue #132) — all globals from Node 20, the package floor, so membership is
+      // fixed by the support contract rather than by whichever runtime happens to be present.
+      ['Headers', new Headers({ 'x-a': '1' })],
+      ['URLSearchParams', new URLSearchParams('a=1')],
+      ['FormData', new FormData()],
+      ['Blob', new Blob(['x'])],
+      ['Request', new Request('http://example.test/')],
+      ['Response', new Response('x')],
+      ['AbortController', new AbortController()],
+      ['AbortSignal', AbortSignal.abort()],
+      ['WeakRef', new WeakRef({})],
     ];
     for (const [name, value] of cases) {
       // Sanity-check the premise rather than trusting it: each of these really does stringify to
@@ -531,6 +542,55 @@ describe('wire model — built-ins JSON.stringify would emit as {} (issue #126)'
       expect(err.path).toBe('$.field');
       expect(err.message).toContain(name);
     }
+  });
+
+  it('refuses a Headers inside a stub response, located by JSONPath (issue #132)', () => {
+    // The plausible slip: `headers: new Headers({...})` on a response, which would otherwise reach
+    // the engine as `headers: {}` and serve a response with no headers at all.
+    const stub = {
+      stubs: [{ responses: [{ is: { statusCode: 200, headers: new Headers({ 'x-a': '1' }) } }] }],
+    };
+    const err = caughtFrom(() => stringifyJsonSafe(stub));
+    expect(err.path).toBe('$.stubs[0].responses[0].is.headers');
+    expect(err.message).toContain('Headers');
+  });
+
+  it('does not refuse a URL or a typed-array view (issue #132)', () => {
+    // `URL` has a `toJSON` (serializes to its href); a typed-array view serializes index-keyed —
+    // lossy but not empty — and is left to the caller to convert deliberately.
+    expect(stringifyJsonSafe({ u: new URL('http://example.test/p'), b: new Uint8Array([1, 2]) })).toBe(
+      '{"u":"http://example.test/p","b":{"0":1,"1":2}}'
+    );
+  });
+
+  it('names the base host object for a Headers subclass (issue #132)', () => {
+    class MyHeaders extends Headers {}
+    const err = caughtFrom(() => stringifyJsonSafe({ h: new MyHeaders() }));
+    expect(err.path).toBe('$.h');
+    expect(err.message).toContain('Headers');
+    expect(err.message).not.toContain('MyHeaders');
+  });
+
+  it('degrades to "not matched" when a host global is absent, instead of a ReferenceError (issue #132)', () => {
+    // `--no-experimental-fetch` removes the fetch globals. The guard must read as "not matched"
+    // there, not throw inside the replacer. Constructed while the global exists, judged after it
+    // is gone; restored in `finally` because jest runs this worker's files in one process.
+    const h = new Headers({ 'x-a': '1' });
+    const saved = globalThis.Headers;
+    // @ts-expect-error — deliberately removing a lib global for the duration of the test
+    delete globalThis.Headers;
+    try {
+      expect(stringifyJsonSafe({ h })).toBe('{"h":{}}');
+    } finally {
+      globalThis.Headers = saved;
+    }
+  });
+
+  it('catches a Headers returned by a toJSON() (issue #132)', () => {
+    const sneaky = { toJSON: () => new Headers({ 'x-a': '1' }) };
+    const err = caughtFrom(() => stringifyJsonSafe({ v: sneaky }));
+    expect(err.path).toBe('$.v');
+    expect(err.message).toContain('Headers');
   });
 
   it('refuses a binary buffer reaching flow state as caller data', () => {
