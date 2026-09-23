@@ -10,6 +10,7 @@
  */
 
 import http from 'http';
+import path from 'path';
 import type { AddressInfo } from 'net';
 import { jest } from '@jest/globals';
 import { createEmbeddedEngine } from '../src/create.js';
@@ -252,6 +253,8 @@ function trackedStartAdminPlane(plane: FakePlane): { fn: StartAdminPlane; callCo
 
 describe('issue #136 — upstreamTrust on the embedded transport', () => {
   const PEM = '-----BEGIN CERTIFICATE-----\nX\n-----END CERTIFICATE-----\n';
+  // Already absolute on every platform (`/etc/...` is drive-relative on Windows and would resolve).
+  const ABS = path.resolve('corp-ca.pem');
   const ALL = ['host', 'port', 'apiKey', 'allowInjection', 'upstreamCaFile', 'upstreamCaPem', 'upstreamTlsSkipVerify'];
 
   function serveCalls(native: FakeNativeEngine): Record<string, unknown>[] {
@@ -260,7 +263,7 @@ describe('issue #136 — upstreamTrust on the embedded transport', () => {
 
   it('starts the admin plane eagerly with exactly one trust key when upstreamTrust is set (each variant its own key)', async () => {
     for (const [trust, expected] of [
-      [{ caFile: '/etc/ssl/corp-ca.pem' }, { upstreamCaFile: '/etc/ssl/corp-ca.pem' }],
+      [{ caFile: ABS }, { upstreamCaFile: ABS }],
       [{ caPem: PEM }, { upstreamCaPem: PEM }],
       [{ skipVerify: true }, { upstreamTlsSkipVerify: true }],
     ] as const) {
