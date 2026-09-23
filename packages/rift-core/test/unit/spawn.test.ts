@@ -157,6 +157,15 @@ describe('spawn — sha256 verification', () => {
 describe('spawn — buildSpawnArgs', () => {
   it('always sets the admin port; adds host/loglevel when given', () => {
     expect(buildSpawnArgs(2525, {})).toEqual(['--port', '2525']);
+    // issue #138: `--no-parse` only ever appears beside `--configfile` — the engine's CLI accepts
+    // it alone and silently does nothing, so the refusal has to be local.
+    expect(buildSpawnArgs(2525, { configfile: '/c.json', noParse: true })).toEqual([
+      '--port', '2525', '--configfile', '/c.json', '--no-parse',
+    ]);
+    expect(buildSpawnArgs(2525, { configfile: '/c.json', noParse: false })).toEqual(['--port', '2525', '--configfile', '/c.json']);
+    expect(buildSpawnArgs(2525, { configfile: '/c.json' })).toEqual(['--port', '2525', '--configfile', '/c.json']);
+    expect(() => buildSpawnArgs(2525, { noParse: true })).toThrow(InvalidDefinition);
+    expect(() => buildSpawnArgs(2525, { noParse: true })).toThrow(/noParse/);
     expect(buildSpawnArgs(0, { host: '127.0.0.1', loglevel: 'debug' })).toEqual([
       '--port',
       '0',
@@ -411,6 +420,14 @@ describe('spawn — blank apiKey is rejected (issue #96)', () => {
     ).rejects.toThrow(InvalidDefinition);
   });
 
+  it('spawn() rejects noParse without configfile before it resolves a binary (issue #138)', async () => {
+    // Same construction as the apiKey cases: RIFT_OFFLINE makes resolveBinary fail with its own
+    // air-gap Error, so InvalidDefinition can only mean the guard ran first.
+    await expect(
+      spawn({ noParse: true, binaryPath: '/nonexistent/rift-binary-issue-138', env: { RIFT_OFFLINE: '1' } })
+    ).rejects.toThrow(InvalidDefinition);
+  });
+
   it('spawn() rejects a blank apiKey before it resolves a binary', async () => {
     // RIFT_OFFLINE makes resolveBinary fail fast and deterministically with its own air-gap Error,
     // so InvalidDefinition here can ONLY mean the guard ran first. Without it the assertion would
@@ -543,6 +560,17 @@ describe('spawn — MB_APIKEY env contract (issue #103)', () => {
       );
       return { engine, args };
     }
+
+    it('passes noParse through to the child as --no-parse (issue #138)', async () => {
+      const admin = await stubAdmin();
+      try {
+        const { engine, args } = await spawnAgainstStub(admin, { configfile: '/etc/rift/imposters.json', noParse: true });
+        await engine.close();
+        expect(args).toContain('--no-parse');
+      } finally {
+        await admin.close();
+      }
+    });
 
     it('binds and dials an IPv6 loopback host with a bracketed admin URL (issue #143)', async () => {
       // The stub listens on ::1 so the readiness poll can only succeed through a URL whose host

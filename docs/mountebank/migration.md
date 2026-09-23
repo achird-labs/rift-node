@@ -205,6 +205,15 @@ You never have to fight the typed layer:
 `{port}.json` under the directory and reloaded when a server starts against the same `datadir`, so
 imposter state survives a restart.
 
+`mb --configfile` maps to `rift.spawn({ configfile })`, and Mountebank's `--noParse` to
+`rift.spawn({ configfile, noParse: true })` (`--no-parse`): the file is loaded verbatim, with no
+EJS preprocessing — also for the `POST /admin/reload` that re-reads it. Since engine 0.18.0 a
+config file holding a tag the loader does not evaluate, a literal `<%` in a body included, fails the
+spawn (surfaced as the engine's stderr) instead of being blanked; `noParse` is the way through.
+`noParse` without `configfile` throws `InvalidDefinition` (the engine's CLI would accept it and
+silently do nothing). The SDK's embedded transport does not expose a config file — it applies
+already-parsed JSON — so there is nothing to switch off there.
+
 **Custom `impostersRepository` (+ its `redis` bag) has no direct equivalent.** Mountebank loads a
 Node module in-process to back its imposter store; Rift's engine is a native binary and cannot load
 one, so `create({ impostersRepository })` / `create({ redis })` **throws
