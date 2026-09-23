@@ -141,6 +141,23 @@ describe('issue #21 — AdminApi total surface (mocked fetch)', () => {
     expect(call(fnPut)).toMatchObject({ url: `${BASE}/imposters/2525/stubs/by-id/x1`, method: 'PUT' });
   });
 
+  it('addSpaceStub POSTs the stub bare — no {stub} envelope (issue #142)', async () => {
+    // The space route takes the stub object directly; `{ stub }` is the envelope of the
+    // non-space `POST /imposters/{port}/stubs` route. Engine 0.18.0 refuses the envelope here with
+    // a 400, and older engines deserialized it as an EMPTY stub that matched everything in that space.
+    const fn = mockFetch(ok(undefined));
+    await client().addSpaceStub(2525, 'flow-1', {
+      id: 's1',
+      predicates: [{ equals: { path: '/data' } }],
+      responses: [{ is: { statusCode: 200, body: 'hi' } }],
+    });
+    expect(call(fn).body).toEqual({
+      id: 's1',
+      predicates: [{ equals: { path: '/data' } }],
+      responses: [{ is: { statusCode: 200, body: 'hi' } }],
+    });
+  });
+
   it('addSpaceStub POSTs to spaces/{flowId}/stubs and listSpaceStubs GETs it', async () => {
     const fnAdd = mockFetch(ok(undefined));
     await client().addSpaceStub(2525, 'flow-1', { responses: [] });

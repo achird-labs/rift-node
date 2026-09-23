@@ -75,6 +75,16 @@ All notable changes to `@rift-vs/rift` are documented here. This project adheres
 
 ### Fixed
 
+- **`space(flowId).addStub()` sends the stub the caller built** (issue #142). `RemoteClient.addSpaceStub`
+  wrapped the stub in the `{ stub }` envelope that belongs to `POST /imposters/{port}/stubs`; the
+  space route takes the stub object bare. Engine 0.18.0 refuses the envelope with a 400 naming it,
+  so every `addStub()` on a space failed after the engine bump. On engines before 0.18.0 the
+  failure was silent and worse: the envelope deserialized as an **empty** stub — no predicates, no
+  responses — that matched every request in the space. Over HTTP (the spawn and remote transports)
+  the method had never delivered the stub it was given until now; the embedded transport sends the
+  stub bare through its native call and was unaffected. No version gate: the bare shape is what
+  every engine reads correctly.
+
 - **A `Map`, `Set` or other slot-backed container is refused instead of reaching the engine as `{}`**
   (issue #126). `JSON.stringify` renders these as `{}` however much they hold, and the replacer only
   inspected scalars, so the entire contents vanished onto the wire with nothing thrown SDK-side.
