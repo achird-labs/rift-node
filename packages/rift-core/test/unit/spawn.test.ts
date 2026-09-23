@@ -38,6 +38,95 @@ const NEL = '\u0085';
 
 const DEFAULT_BASE = 'https://github.com/achird-labs/rift/releases/download';
 
+describe('issue #136 — upstreamTrust on the spawn transport', () => {
+  function fakeChild(): ChildProcess {
+    const child = new EventEmitter() as unknown as ChildProcess;
+    return Object.assign(child, { stderr: null, stdout: null, exitCode: 0, signalCode: null, kill: () => true });
+  }
+
+  it('renders --upstream-ca-file (absolute) and --upstream-tls-skip-verify; nothing when unset', () => {
+    expect(buildSpawnArgs(2525, { upstreamTrust: { caFile: '/etc/ssl/corp-ca.pem' } })).toEqual([
+      '--port', '2525', '--upstream-ca-file', '/etc/ssl/corp-ca.pem',
+    ]);
+    expect(buildSpawnArgs(2525, { upstreamTrust: { caFile: 'certs/ca.pem' } })).toEqual([
+      '--port', '2525', '--upstream-ca-file', path.resolve('certs/ca.pem'),
+    ]);
+    expect(buildSpawnArgs(2525, { upstreamTrust: { skipVerify: true } })).toEqual(['--port', '2525', '--upstream-tls-skip-verify']);
+    expect(buildSpawnArgs(2525, {})).toEqual(['--port', '2525']);
+  });
+
+  it('refuses caPem on the spawn transport, naming caFile (the CLI has no inline-PEM flag)', () => {
+    const pem = '-----BEGIN CERTIFICATE-----\nX\n-----END CERTIFICATE-----\n';
+    expect(() => buildSpawnArgs(2525, { upstreamTrust: { caPem: pem } })).toThrow(InvalidDefinition);
+    expect(() => buildSpawnArgs(2525, { upstreamTrust: { caPem: pem } })).toThrow(/caFile/);
+  });
+
+  it.each([
+    ['0.17.0', true],
+    [undefined, true],
+    ['0.18.0', false],
+    ['0.19.2', false],
+  ])('gates on the binary version: engine %s → refused=%s (never launched when refused)', async (engineVersion, refused) => {
+    let launched = false;
+    const deps: SpawnDeps = {
+      resolveBinary: async () => process.execPath,
+      probeVersion: () => engineVersion,
+      spawn: ((_bin: string) => {
+        launched = true;
+        return fakeChild();
+      }) as unknown as SpawnDeps['spawn'],
+    };
+    const attempt = spawn(
+      { upstreamTrust: { caFile: '/etc/ssl/corp-ca.pem' }, binaryPath: process.execPath, startupTimeoutMs: 200 },
+      deps
+    );
+    if (refused) {
+      // Below the floor the flag does not exist: the engine would refuse it at startup, or worse an
+      // older build might ignore it and record against the wrong trust. Refuse before launching.
+      await expect(attempt).rejects.toThrow(EngineVersionError);
+      await expect(attempt).rejects.toThrow(/upstreamTrust/);
+      expect(launched).toBe(false);
+    } else {
+      // Past the gate the launch happens; the readiness poll then times out against no server,
+      // which is the expected end of this fake — the gate is what is under test.
+      await expect(attempt).rejects.toThrow(/did not become ready/);
+      expect(launched).toBe(true);
+    }
+  });
+
+  it('does not probe the binary version at all when upstreamTrust is unset', async () => {
+    let probed = false;
+    const deps: SpawnDeps = {
+      resolveBinary: async () => process.execPath,
+      probeVersion: () => {
+        probed = true;
+        return '0.18.0';
+      },
+      spawn: ((_bin: string) => fakeChild()) as unknown as SpawnDeps['spawn'],
+    };
+    await expect(spawn({ binaryPath: process.execPath, startupTimeoutMs: 200 }, deps)).rejects.toThrow(/did not become ready/);
+    expect(probed).toBe(false);
+  });
+
+  it('emits one process warning for skipVerify', async () => {
+    const emitWarning = jest.spyOn(process, 'emitWarning').mockImplementation(() => undefined);
+    try {
+      const deps: SpawnDeps = {
+        resolveBinary: async () => process.execPath,
+        probeVersion: () => '0.18.0',
+        spawn: ((_bin: string) => fakeChild()) as unknown as SpawnDeps['spawn'],
+      };
+      await expect(spawn({ upstreamTrust: { skipVerify: true }, binaryPath: process.execPath, startupTimeoutMs: 200 }, deps)).rejects.toThrow(
+        /did not become ready/
+      );
+      const messages = emitWarning.mock.calls.map((c) => String(c[0]));
+      expect(messages.filter((m) => /skipVerify/.test(m))).toHaveLength(1);
+    } finally {
+      emitWarning.mockRestore();
+    }
+  });
+});
+
 describe('spawn — platform target mapping', () => {
   it('maps known platforms to rust target triples + archive ext', () => {
     expect(platformTarget('linux', 'x64')).toMatchObject({

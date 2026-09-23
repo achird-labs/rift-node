@@ -10,8 +10,16 @@
  * which self-skips without `RIFT_FFI_LIB`.
  */
 
-import { Engine, versionIssue, MIN_ENGINE_VERSION, type BuildInfo } from '@rift-vs/rift/internal';
-import { EngineVersionError, NativeLibraryError } from '@rift-vs/rift';
+import {
+  Engine,
+  versionIssue,
+  MIN_ENGINE_VERSION,
+  assertUpstreamTrust,
+  upstreamTrustServeKey,
+  warnUpstreamTrustSkipVerify,
+  type BuildInfo,
+} from '@rift-vs/rift/internal';
+import { EngineUnavailable, EngineVersionError, NativeLibraryError } from '@rift-vs/rift';
 import { resolveCdylib } from '@rift-vs/rift';
 import { EmbeddedInterceptBackend } from './intercept-backend.js';
 import { NativeEngine } from './native.js';
@@ -55,11 +63,14 @@ function parseBuildInfo(raw: string): BuildInfo {
     throw new NativeLibraryError(`embedded engine build info is missing "version": ${raw}`);
   }
   const features = obj['features'];
+  const serveOptions = obj['serveOptions'];
   return {
     version: obj['version'],
     commit: typeof obj['commit'] === 'string' ? obj['commit'] : undefined,
     builtAt: typeof obj['builtAt'] === 'string' ? obj['builtAt'] : undefined,
     features: Array.isArray(features) ? features.filter((f): f is string => typeof f === 'string') : [],
+    // Absent before engine 0.17.0; a serve option is feature-detected by presence in this list.
+    serveOptions: Array.isArray(serveOptions) ? serveOptions.filter((k): k is string => typeof k === 'string') : [],
   };
 }
 
@@ -109,7 +120,38 @@ export async function createEmbeddedEngine(
   runVersionPreflight(buildInfo, options.versionCheck ?? 'fail');
   runFeaturePreflight(buildInfo, options.requireFeatures);
 
-  const admin = new EmbeddedAdmin({ native, buildInfo, startAdminPlane: deps.startAdminPlane });
+  const upstreamTrust = options.upstreamTrust;
+  if (upstreamTrust !== undefined) {
+    assertUpstreamTrust(upstreamTrust);
+    // Presence, never version: an engine before 0.17.0 has no list and ignores an unknown key
+    // instead of refusing it, and from 0.17.0 on the list is authoritative — so the key must be
+    // advertised before it is sent.
+    const key = upstreamTrustServeKey(upstreamTrust);
+    const advertised = buildInfo.serveOptions ?? [];
+    if (!advertised.includes(key)) {
+      throw new EngineUnavailable(
+        `${key} needs a rift engine >= 0.18.0; this engine advertises serveOptions [${advertised.join(', ')}]. ` +
+          `Upgrade the engine, or drop upstreamTrust.`
+      );
+    }
+    if ('skipVerify' in upstreamTrust) warnUpstreamTrustSkipVerify();
+  }
+
+  const admin = new EmbeddedAdmin({ native, buildInfo, startAdminPlane: deps.startAdminPlane, upstreamTrust });
+
+  // The trust is installed by `rift_serve_admin` and read by an imposter's upstream client and by
+  // the intercept listener when they are created — so with trust set the plane cannot stay lazy,
+  // or an imposter created before the first bridge call would never see it.
+  if (upstreamTrust !== undefined) {
+    try {
+      await admin.adminUrl();
+    } catch (error) {
+      // `rift_serve_admin` reads and checks the anchor during the call, so a bad path or PEM
+      // fails HERE; no Engine is returned, so nothing else would ever close the native handle.
+      await admin.close();
+      throw error;
+    }
+  }
 
   // No `onClose` hook: `Engine.close()` already awaits `adminClient.close()` (== `admin.close()`)
   // unconditionally — there's no separate spawned process to tear down for the embedded transport.

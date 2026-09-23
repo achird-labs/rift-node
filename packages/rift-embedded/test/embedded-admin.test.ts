@@ -14,7 +14,7 @@ import type { AddressInfo } from 'net';
 import { jest } from '@jest/globals';
 import { createEmbeddedEngine } from '../src/create.js';
 import type { NativeEngineLike, StartAdminPlane } from '../src/admin.js';
-import { EngineVersionError, NativeLibraryError, ImposterNotFound, RiftError, WireValidationError } from '@rift-vs/rift';
+import { EngineUnavailable, EngineVersionError, NativeLibraryError, ImposterNotFound, RiftError, WireValidationError } from '@rift-vs/rift';
 import { MIN_ENGINE_VERSION } from '@rift-vs/rift/internal';
 import type { AdminApi, Imposter, Stub } from '@rift-vs/rift/internal';
 
@@ -249,6 +249,93 @@ function trackedStartAdminPlane(plane: FakePlane): { fn: StartAdminPlane; callCo
 // -------------------------------------------------------------------------------------------
 // Preflight
 // -------------------------------------------------------------------------------------------
+
+describe('issue #136 — upstreamTrust on the embedded transport', () => {
+  const PEM = '-----BEGIN CERTIFICATE-----\nX\n-----END CERTIFICATE-----\n';
+  const ALL = ['host', 'port', 'apiKey', 'allowInjection', 'upstreamCaFile', 'upstreamCaPem', 'upstreamTlsSkipVerify'];
+
+  function serveCalls(native: FakeNativeEngine): Record<string, unknown>[] {
+    return native.calls.filter((c) => c.fn === 'serveAdmin').map((c) => JSON.parse(c.args[0] as string) as Record<string, unknown>);
+  }
+
+  it('starts the admin plane eagerly with exactly one trust key when upstreamTrust is set (each variant its own key)', async () => {
+    for (const [trust, expected] of [
+      [{ caFile: '/etc/ssl/corp-ca.pem' }, { upstreamCaFile: '/etc/ssl/corp-ca.pem' }],
+      [{ caPem: PEM }, { upstreamCaPem: PEM }],
+      [{ skipVerify: true }, { upstreamTlsSkipVerify: true }],
+    ] as const) {
+      const native = new FakeNativeEngine(goodBuildInfo({ serveOptions: ALL }));
+      const engine = await createEmbeddedEngine({ upstreamTrust: trust }, { loadNativeEngine: async () => native });
+      const calls = serveCalls(native);
+      expect(calls).toHaveLength(1);
+      const { apiKey, ...rest } = calls[0] as Record<string, unknown>;
+      expect(typeof apiKey).toBe('string');
+      expect(rest).toEqual({ host: '127.0.0.1', port: 0, ...expected });
+      await engine.close();
+    }
+  });
+
+  it('keeps the plane lazy and never consults serveOptions when upstreamTrust is unset', async () => {
+    const native = new FakeNativeEngine(goodBuildInfo());
+    const engine = await createEmbeddedEngine({}, { loadNativeEngine: async () => native });
+    expect(serveCalls(native)).toHaveLength(0);
+    await engine.close();
+  });
+
+  it('refuses an engine that does not advertise the exact key — missing list, or list without it', async () => {
+    for (const buildInfo of [goodBuildInfo(), goodBuildInfo({ serveOptions: ['host', 'port', 'apiKey'] }), goodBuildInfo({ serveOptions: ['upstreamCaPem'] })]) {
+      const native = new FakeNativeEngine(buildInfo);
+      const attempt = createEmbeddedEngine({ upstreamTrust: { caFile: '/c.pem' } }, { loadNativeEngine: async () => native });
+      await expect(attempt).rejects.toThrow(EngineUnavailable);
+      await expect(attempt).rejects.toThrow(/upstreamCaFile/);
+      expect(serveCalls(native)).toHaveLength(0);
+    }
+  });
+
+  it('closes the native engine when the eager plane fails (a bad anchor fails inside rift_serve_admin)', async () => {
+    const native = new FakeNativeEngine(goodBuildInfo({ serveOptions: ALL }));
+    const boom = async () => {
+      throw new RiftError('reading upstreamCaFile `/nope.pem`: No such file');
+    };
+    await expect(
+      createEmbeddedEngine({ upstreamTrust: { caFile: '/nope.pem' } }, { loadNativeEngine: async () => native, startAdminPlane: boom })
+    ).rejects.toThrow(/upstreamCaFile/);
+    expect(native.closeCalls).toBe(1);
+  });
+
+  it('serves before any intercept listener starts, so the listener binds with the trust', async () => {
+    const native = new FakeNativeEngine(goodBuildInfo({ serveOptions: ALL }));
+    const engine = await createEmbeddedEngine({ upstreamTrust: { caFile: '/c.pem' } }, { loadNativeEngine: async () => native });
+    await engine.intercept();
+    const order = native.calls.map((c) => c.fn).filter((f) => f === 'serveAdmin' || f === 'startIntercept');
+    expect(order).toEqual(['serveAdmin', 'startIntercept']);
+    await engine.close();
+  });
+
+  it('warns once for { skipVerify: true } on the embedded transport too', async () => {
+    const emitWarning = jest.spyOn(process, 'emitWarning').mockImplementation(() => undefined);
+    try {
+      const native = new FakeNativeEngine(goodBuildInfo({ serveOptions: ALL }));
+      const engine = await createEmbeddedEngine({ upstreamTrust: { skipVerify: true } }, { loadNativeEngine: async () => native });
+      expect(emitWarning.mock.calls.filter((c) => /skipVerify/.test(String(c[0])))).toHaveLength(1);
+      await engine.close();
+    } finally {
+      emitWarning.mockRestore();
+    }
+  });
+
+  it('buildInfo().serveOptions is the advertised list, or [] when the cdylib predates it', async () => {
+    const withList = await createEmbeddedEngine({}, { loadNativeEngine: async () => new FakeNativeEngine(goodBuildInfo({ serveOptions: ['host', 'port'] })) });
+    expect((await withList.buildInfo()).serveOptions).toEqual(['host', 'port']);
+    await withList.close();
+    const without = await createEmbeddedEngine({}, { loadNativeEngine: async () => new FakeNativeEngine(goodBuildInfo({ serveOptions: 'nope' })) });
+    expect((await without.buildInfo()).serveOptions).toEqual([]);
+    await without.close();
+    const mixed = await createEmbeddedEngine({}, { loadNativeEngine: async () => new FakeNativeEngine(goodBuildInfo({ serveOptions: ['host', 123, 'port'] })) });
+    expect((await mixed.buildInfo()).serveOptions).toEqual(['host', 'port']);
+    await mixed.close();
+  });
+});
 
 describe('preflight — version', () => {
   it('an older version fails by default (versionCheck defaults to "fail")', async () => {
@@ -621,6 +708,8 @@ describe('engine.buildInfo() returns the parsed static value with no admin round
       commit: 'deadbeef',
       builtAt: '2026-02-02T00:00:00Z',
       features: ['javascript'],
+      // `[]` when the cdylib predates the list (engine < 0.17.0); the fake above sends none.
+      serveOptions: [],
     });
     await engine.close();
   });

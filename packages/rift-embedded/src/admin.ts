@@ -20,7 +20,8 @@ import type {
   RecordedRequest as WireRecordedRequest,
   Stub,
 } from '@rift-vs/rift/internal';
-import type { AdminApi, BuildInfo } from '@rift-vs/rift/internal';
+import type { AdminApi, BuildInfo, UpstreamTrust } from '@rift-vs/rift/internal';
+import { upstreamTrustServeOptions } from '@rift-vs/rift/internal';
 import type { FlowScopedOptions } from '@rift-vs/rift/internal';
 import { ImposterNotFound, InvalidDefinition, RiftError } from '@rift-vs/rift';
 import { toRecordedRequest, stringifyJsonSafe } from '@rift-vs/rift/internal';
@@ -62,14 +63,15 @@ export interface NativeEngineLike {
  * `rift_serve_admin` call. */
 export type StartAdminPlane = (
   native: NativeEngineLike,
-  opts: { apiKey: string }
+  opts: { apiKey: string; upstreamTrust?: UpstreamTrust }
 ) => Promise<{ adminUrl: string }>;
 
 async function defaultStartAdminPlane(
   native: NativeEngineLike,
-  opts: { apiKey: string }
+  opts: { apiKey: string; upstreamTrust?: UpstreamTrust }
 ): Promise<{ adminUrl: string }> {
-  const result = await native.serveAdmin(JSON.stringify({ host: '127.0.0.1', port: 0, apiKey: opts.apiKey }));
+  const trust = opts.upstreamTrust === undefined ? {} : upstreamTrustServeOptions(opts.upstreamTrust);
+  const result = await native.serveAdmin(JSON.stringify({ host: '127.0.0.1', port: 0, apiKey: opts.apiKey, ...trust }));
   const adminUrl = result['adminUrl'];
   if (typeof adminUrl !== 'string') {
     throw new RiftError('embedded admin plane (rift_serve_admin) did not report an adminUrl');
@@ -81,6 +83,8 @@ export interface EmbeddedAdminOptions {
   native: NativeEngineLike;
   buildInfo: BuildInfo;
   startAdminPlane?: StartAdminPlane;
+  /** Sent with the plane's `rift_serve_admin`; `create.ts` has already gated it on `serveOptions`. */
+  upstreamTrust?: UpstreamTrust;
 }
 
 interface Plane {
@@ -119,6 +123,7 @@ export class EmbeddedAdmin implements AdminApi {
   #native: NativeEngineLike;
   readonly buildInfo: BuildInfo;
   #startAdminPlane: StartAdminPlane;
+  #upstreamTrust: UpstreamTrust | undefined;
   #registry = new Map<number, Imposter>();
   #planePromise: Promise<Plane> | undefined;
   #closed = false;
@@ -127,6 +132,7 @@ export class EmbeddedAdmin implements AdminApi {
     this.#native = opts.native;
     this.buildInfo = opts.buildInfo;
     this.#startAdminPlane = opts.startAdminPlane ?? defaultStartAdminPlane;
+    this.#upstreamTrust = opts.upstreamTrust;
   }
 
   /** Starts the loopback admin plane on first use (idempotent — see `#ensurePlane`) and returns its
@@ -424,7 +430,7 @@ export class EmbeddedAdmin implements AdminApi {
 
   async #startPlane(): Promise<Plane> {
     const apiKey = randomUUID();
-    const { adminUrl } = await this.#startAdminPlane(this.#native, { apiKey });
+    const { adminUrl } = await this.#startAdminPlane(this.#native, { apiKey, upstreamTrust: this.#upstreamTrust });
     return { bridge: new AdminBridge({ adminUrl, apiKey }), adminUrl };
   }
 }

@@ -63,6 +63,7 @@ export type {
   InterceptHandle,
   InterceptOptions,
 } from './engine.js';
+export type { UpstreamTrust } from './upstream-trust.js';
 
 // Binary discovery helpers (thin wrappers over the resolver; kept for compatibility).
 export { findBinary, downloadBinary, getBinaryVersion } from './binary.js';
