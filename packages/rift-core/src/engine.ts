@@ -821,19 +821,25 @@ export class Engine implements RiftEngine {
 
   async #startIntercept(options: InterceptOptions | undefined): Promise<InterceptHandle> {
     if (this.transport === 'embedded') return this.#startEmbeddedIntercept(options);
-    // Only the embedded backend actually STARTS a listener from these options. Spawn and remote
-    // ATTACH to one the engine already brought up from `--intercept-port`, because there is no
-    // runtime start endpoint yet (rift#493) — `RemoteInterceptBackend.startIntercept` reads `host`
-    // and `port` off the JSON and discards the rest. Accepting `auth` there would drop the
-    // credential on the floor and hand back a handle to an unauthenticated MITM proxy, which is the
-    // precise failure this option exists to prevent. Refuse instead, and name the door that works.
-    if (options?.auth !== undefined) {
+    // Only the embedded backend STARTS a listener from these options. Spawn and remote ATTACH to
+    // one the engine's operator already started — by design, not for want of an endpoint: the
+    // engine has had POST /intercept since v0.13.0 (`auth` on it since 0.17.0), but bringing up a
+    // TLS-intercepting listener on
+    // an engine the SDK did not start is the operator's decision (the engine keeps its exposure
+    // policy off the request body for the same reason), and on spawn the spawn-time flags already
+    // configure the listener before it accepts a byte. So a startup-only option here would be
+    // silently dropped — a handle to an unauthenticated proxy, or one signed by a CA the caller
+    // never supplied. Refuse them all at once, and name the doors that work.
+    const startupOnly: string[] = [];
+    if (options?.auth !== undefined) startupOnly.push('auth');
+    // `validateInterceptOptions` has enforced both-or-neither, so either field stands for the pair.
+    if (options?.caCertPath !== undefined || options?.caKeyPath !== undefined) startupOnly.push('caCertPath/caKeyPath');
+    if (startupOnly.length > 0) {
       throw new InterceptUnavailable(
-        `intercept auth cannot be applied over the ${this.transport} transport: its listener is ` +
-          `started by the engine process itself, and there is no runtime endpoint to hand it a ` +
-          `credential (rift#493). Pass it at spawn time instead — ` +
-          `rift.spawn({ intercept: { auth: { username, password } } }) — or use rift.embedded(), ` +
-          `whose listener is started in-process from these options.`
+        `intercept ${startupOnly.join(' and ')} cannot be applied over the ${this.transport} transport: it ` +
+          `attaches to a listener the engine's operator started and does not start or reconfigure one. ` +
+          `Pass them where the listener is started: rift.spawn({ intercept: { caCertPath, caKeyPath, auth } }) ` +
+          `or rift.embedded().`
       );
     }
     if (this.transport === 'spawn') return this.#startSpawnIntercept(options);
@@ -875,26 +881,29 @@ export class Engine implements RiftEngine {
       throw new InterceptUnavailable('remote transport has no admin URL to attach intercept to');
     }
     const parsed = new URL(adminUrl);
-    // No documented endpoint reports an already-running remote engine's intercept listener port
-    // (rift#493 tracks a runtime start/status endpoint upstream); until it lands, attach defaults to
-    // the admin port unless the caller passes one explicitly.
-    const basePort = parsed.port !== '' ? Number(parsed.port) : undefined;
-    const port = options?.port ?? basePort;
-    if (port === undefined) {
-      // A URL like `https://host` (no explicit port) leaves nothing to point the SUT's proxy at —
-      // `Number('')` would silently yield 0. Require an explicit port instead of a wrong `:0`.
-      throw new InterceptUnavailable(
-        'remote intercept needs an explicit port — the admin URL has none; pass intercept({ port })'
-      );
-    }
-    const resolved: InterceptOptions = { host: parsed.hostname, ...options, port };
     // `RemoteClient` is the only `AdminApi` the remote transport ever constructs (`connectEngine`).
-    const backend = new RemoteInterceptBackend(this.adminClient as RemoteClient);
+    const client = this.adminClient as RemoteClient;
     try {
-      return await startInterceptWithBackend(backend, resolved);
+      // An explicit port is the caller saying where the listener is — attach there through the
+      // rules probe, which every engine at the 0.12.0 floor answers. Without one, ask the engine:
+      // `GET /intercept` (v0.13.0+) reports the real port, and the intercept listener never shares
+      // the admin port, so nothing else is a sane default. Its `interceptUrl` is the engine's BIND
+      // address (`0.0.0.0` when exposed), so the handle is built on the admin hostname instead.
+      if (options?.port !== undefined) {
+        const backend = new RemoteInterceptBackend(client);
+        return await startInterceptWithBackend(backend, { host: parsed.hostname, ...options });
+      }
+      const { interceptPort } = await client.interceptStatus();
+      const backend = new RemoteInterceptBackend(client, { probe: false });
+      return await startInterceptWithBackend(backend, { host: parsed.hostname, ...options, port: interceptPort });
     } catch (error) {
       if (error instanceof ImposterNotFound) {
-        throw new InterceptUnavailable('the Rift server must be started with --intercept-port');
+        // The same 404 also comes from an engine older than 0.13.0, which has no GET /intercept
+        // even when its listener is up; an explicit port takes the rules-probe path instead.
+        throw new InterceptUnavailable(
+          'the Rift server must be started with --intercept-port' +
+            (options?.port === undefined ? ' (on an engine older than 0.13.0, pass intercept({ port }))' : '')
+        );
       }
       throw error;
     }

@@ -739,9 +739,13 @@ Per-transport availability (documented, typed):
 - **spawn** — must be requested at spawn: `rift.spawn({ intercept: true | InterceptOptions })`
   maps to `--intercept-port` (+ CA flags). `engine.intercept()` without it throws
   `InterceptUnavailable` with the fix in the message.
-- **remote** — attach-only: probes `GET /intercept/rules`; 404 → `InterceptUnavailable`
-  ("start the server with --intercept-port"). Runtime start/status parity is upstream
-  **rift#493**.
+- **remote** — attach-only, by design: the SDK does not start or reconfigure a TLS-intercepting
+  listener on an engine it did not start (the engine models that as the operator's decision too —
+  its exposure policy is a flag, not a request field). With no `port`, `engine.intercept()` asks
+  `GET /intercept` (engine ≥ 0.13.0) for the listener's port and attaches there on the admin
+  hostname; 404 → `InterceptUnavailable` ("start the server with --intercept-port"). An explicit
+  `intercept({ port })` attaches to that port through the `GET /intercept/rules` probe, which every
+  engine at the 0.12.0 floor answers.
 
 Trust helpers: `handle.env()` covers child-process SUTs; for in-process undici/fetch, the optional
 subpath `@rift-vs/rift/intercept-undici` (peer-dep `undici`) exports
@@ -780,15 +784,17 @@ interface SpawnOptions {
 
 | Door | Carries `auth`? |
 |---|---|
-| `rift.spawn({ intercept: { auth } })` | yes — the credential is engine startup configuration |
-| `rift.embedded()` then `engine.intercept({ auth })` | yes — the listener is started in-process from these options |
-| `rift.spawn(...)`/`rift.connect(...)` then `engine.intercept({ auth })` | **no — throws `InterceptUnavailable`** |
+| `rift.spawn({ intercept: { auth, caCertPath, caKeyPath } })` | yes — startup configuration of the listener |
+| `rift.embedded()` then `engine.intercept({ auth, caCertPath, caKeyPath })` | yes — the listener is started in-process from these options |
+| `rift.spawn(...)`/`rift.connect(...)` then `engine.intercept({ auth })` or `({ caCertPath, caKeyPath })` | **no — throws one `InterceptUnavailable` naming every startup-only option present** |
 
-That last row is a limitation of the engine, not a preference. On the spawn and remote transports
-`engine.intercept()` *attaches* to a listener the engine already brought up from `--intercept-port`;
-there is no runtime endpoint to hand a running listener a credential (rift#493). Rather than accept
-`auth` and silently drop it — handing back a handle to an unauthenticated proxy — the SDK refuses and
-points at `rift.spawn({ intercept: { auth } })`.
+That last row is a design decision, not an engine limitation: the engine has accepted these on
+`POST /intercept` since v0.13.0 (`auth` since v0.17.0). On the spawn and remote transports `engine.intercept()` *attaches*
+to a listener the engine's operator already started, and the SDK does not start or reconfigure a
+TLS-intercepting listener on an engine it did not start. Rather than accept `auth` or a CA and
+silently drop them — handing back a handle to an unauthenticated proxy, or one signed by a CA the
+caller never supplied — the SDK refuses and points at `rift.spawn({ intercept: { … } })` and
+`rift.embedded()`. `host` and `port` stay legal there: they are attach parameters and are used.
 
 Two more behaviours worth knowing:
 
@@ -982,5 +988,4 @@ Open upstream (rift engine):
 | rift#473 | docs redirect for the relocated quick starts |
 | rift#491 | FFI admin long-tail symbols (retires §8.2's loopback bridge) |
 | rift#492 | `allowInjection` option on `rift_serve_admin` |
-| rift#493 | runtime intercept lifecycle endpoints (§7 remote parity) |
 | rift#494 | server-side verification endpoint (full-fidelity §6 `verify`) |
