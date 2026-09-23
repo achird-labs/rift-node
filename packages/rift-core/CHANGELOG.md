@@ -7,6 +7,27 @@ All notable changes to `@rift-vs/rift` are documented here. This project adheres
 
 ### Added
 
+- **`upstreamTrust` — the engine's outbound TLS trust, on `rift.spawn()` and `rift.embedded()`**
+  (issue #136). Recording against an origin issued by a private CA failed with
+  `invalid peer certificate: UnknownIssuer` and nothing in the SDK could change that; since engine
+  0.18.0 (rift#974) the trust is a per-engine option. One union, one policy: `{ caFile }` (PEM,
+  *appended* to the OS store; the path is resolved when the option is read), `{ caPem }` (inline;
+  embedded only — the CLI has no inline flag, spawn throws `InvalidDefinition` naming `caFile`), or
+  `{ skipVerify: true }` (development only; the SDK emits a process warning, since the engine's own
+  goes nowhere an SDK caller looks). The same trust governs `https:` config sources and the
+  intercept relay. `connect()` takes none: a connected engine's trust belongs to whoever started it.
+
+  Older engines are refused, never ignored. Spawn probes the resolved binary's version, like
+  `intercept.auth`; below 0.18.0 or unrecognisable → `EngineVersionError`. Embedded gates on
+  *presence* — a cdylib before 0.17.0 has no list and ignores an unknown serve key rather than
+  refusing it; from 0.17.0 on the list is authoritative — so the exact key must be in
+  `rift_build_info().serveOptions` (now `BuildInfo.serveOptions` on the embedded transport, `[]`
+  when the cdylib predates the list) → `EngineUnavailable` otherwise. Setting it also starts the embedded
+  loopback admin plane eagerly: the engine installs the trust inside `rift_serve_admin`, and an
+  imposter or intercept listener created before that call would silently keep the default trust
+  (rift-java hit exactly this). Without `upstreamTrust` nothing changes: the plane stays lazy and
+  the spawn command line is byte-identical.
+
 - **`rift.spawn({ configfile, noParse: true })`** (issue #138) maps to the engine's `--no-parse`: the
   config file is loaded verbatim, with no EJS preprocessing, and so is the `POST /admin/reload` that
   re-reads it. Since engine 0.18.0 a config file holding a tag the loader does not evaluate — a

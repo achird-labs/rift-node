@@ -19,6 +19,12 @@ import {
 } from '../apikey.js';
 import type { InterceptOptions } from '../intercept/types.js';
 import { hostForUrl } from '../host.js';
+import {
+  MIN_UPSTREAM_TRUST_ENGINE,
+  upstreamTrustSpawnArgs,
+  warnUpstreamTrustSkipVerify,
+  type UpstreamTrust,
+} from '../upstream-trust.js';
 import { isAtLeastVersion } from '../version.js';
 import { resolveBinary, type EnvRecord } from './resolve.js';
 
@@ -54,6 +60,7 @@ export interface SpawnArgsOptions {
   noParse?: boolean;
   defaultTls?: { cert: string; key: string };
   metricsPort?: number;
+  upstreamTrust?: UpstreamTrust;
   /** `auth` is deliberately absent: the credential travels on the child's ENVIRONMENT, never argv
    * (see `spawn()`), so a `buildSpawnArgs` that silently dropped it would be an
    * open-proxy-believed-guarded hazard. Making it unrepresentable beats documenting it. */
@@ -100,6 +107,9 @@ export function buildSpawnArgs(port: number, opts: SpawnArgsOptions = {}): strin
   }
   if (opts.metricsPort !== undefined) {
     args.push('--metrics-port', String(opts.metricsPort));
+  }
+  if (opts.upstreamTrust !== undefined) {
+    args.push(...upstreamTrustSpawnArgs(opts.upstreamTrust));
   }
   if (opts.intercept === true) {
     args.push('--intercept-port', '0');
@@ -222,6 +232,11 @@ export interface SpawnOptions {
    * evaluate — a literal `<%` in a body included — fails the spawn instead of being blanked, and
    * this is the way through. Requires `configfile`. */
   noParse?: boolean;
+  /** --upstream-ca-file / --upstream-tls-skip-verify (engine >= 0.18.0): the trust the engine's
+   * `proxy` stubs and intercept relay use when dialing an origin. `{ caPem }` is refused here — the
+   * CLI has no inline-PEM flag — pass `{ caFile }` or use `rift.embedded()`. Gated on the resolved
+   * binary's version like `intercept.auth`: an older engine is refused, not silently ignored. */
+  upstreamTrust?: UpstreamTrust;
   /** --default-tls-cert / --default-tls-key */
   defaultTls?: { cert: string; key: string };
   /** --metrics-port */
@@ -331,6 +346,9 @@ export async function spawn(opts: SpawnOptions = {}, deps: SpawnDeps = defaultSp
   // download to discover, and the engine would only report it as an opaque child-process exit.
   const apiKey = resolveApiKey(opts.apiKey);
   assertNoParseHasConfigfile(opts);
+  // Shape and the caPem refusal up front too: a malformed option, or one this transport cannot
+  // carry, should be named as such — not reported as a version problem after a download.
+  if (opts.upstreamTrust !== undefined) upstreamTrustSpawnArgs(opts.upstreamTrust);
   const interceptEnabled = opts.intercept === true || (typeof opts.intercept === 'object' && opts.intercept !== null);
   const interceptAuth = typeof opts.intercept === 'object' && opts.intercept !== null ? opts.intercept.auth : undefined;
   // Validate the option before anything is resolved, like the admin key: a credential that cannot
@@ -387,6 +405,22 @@ export async function spawn(opts: SpawnOptions = {}, deps: SpawnDeps = defaultSp
     }
   }
 
+  // Same construction as the intercept-auth gate above, for the same reason: below 0.18.0 the
+  // flag does not exist, and a gate that cannot confirm it must not assume it.
+  if (opts.upstreamTrust !== undefined) {
+    const version = (deps.probeVersion ?? probeBinaryVersion)(binaryPath);
+    if (!isAtLeastVersion(version, MIN_UPSTREAM_TRUST_ENGINE)) {
+      throw new EngineVersionError(
+        version ?? 'unknown',
+        MIN_UPSTREAM_TRUST_ENGINE,
+        `upstreamTrust needs engine >= ${MIN_UPSTREAM_TRUST_ENGINE} (${binaryPath} reports ` +
+          `${version ?? 'no recognizable version'}): older engines have no --upstream-ca-file / ` +
+          `--upstream-tls-skip-verify, so the trust could not be applied. Pin a newer engine, or drop upstreamTrust.`
+      );
+    }
+    if ('skipVerify' in opts.upstreamTrust) warnUpstreamTrustSkipVerify();
+  }
+
   const port = opts.port ?? (await findFreePort());
   const interceptPort = await resolveInterceptPort(opts.intercept);
   const intercept: SpawnOptions['intercept'] =
@@ -411,6 +445,7 @@ export async function spawn(opts: SpawnOptions = {}, deps: SpawnDeps = defaultSp
     datadir: opts.datadir,
     configfile: opts.configfile,
     noParse: opts.noParse,
+    upstreamTrust: opts.upstreamTrust,
     defaultTls: opts.defaultTls,
     metricsPort: opts.metricsPort,
     intercept,

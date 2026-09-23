@@ -28,3 +28,11 @@ export { toRecordedRequest } from './verify/index.js';
 export { evalPredicates } from './verify/eval.js';
 
 export type { InterceptBackend, InterceptOptions } from './intercept/types.js';
+export {
+  assertUpstreamTrust,
+  upstreamTrustServeKey,
+  upstreamTrustServeOptions,
+  warnUpstreamTrustSkipVerify,
+  MIN_UPSTREAM_TRUST_ENGINE,
+} from './upstream-trust.js';
+export type { UpstreamTrust } from './upstream-trust.js';

@@ -52,6 +52,7 @@ import { RemoteInterceptBackend } from './intercept/remote-backend.js';
 import { forwardRule, redirectRule, serveRule } from './intercept/rules.js';
 import { makeJsonSafeReplacer, stringifyJsonSafe } from './model/serialize.js';
 import { hostForUrl } from './host.js';
+import type { UpstreamTrust } from './upstream-trust.js';
 import { extractEngineVersion, isBelowVersion, parseSemver } from './version.js';
 import { assertInterceptAuthOption } from './apikey.js';
 
@@ -71,6 +72,11 @@ export interface BuildInfo {
   commit?: string;
   builtAt?: string;
   features: string[];
+  /** The `rift_serve_admin` option keys this engine accepts (engine >= 0.17.0; `[]` when it
+   * predates the list). Filled by the embedded transport. Presence here, not the version, is how a
+   * serve option is feature-detected: a cdylib before 0.17.0 ignores an unknown key rather than
+   * refusing it, and from 0.17.0 on the list is authoritative. */
+  serveOptions?: string[];
 }
 
 // --- AdminApi: the total, typed admin surface every transport implements ----------------------
@@ -999,6 +1005,8 @@ export const MIN_ENGINE_VERSION = packageJson.minEngineVersion ?? '0.0.0';
 
 // --- entry points: rift.connect / rift.spawn / rift.embedded --------------------------------
 
+/** No `upstreamTrust` here: a connected engine's outbound TLS trust belongs to whoever started it
+ * (`--upstream-ca-file` on its command line, or the serve options of its embedder). */
 export interface ConnectOptions {
   /** Sent as `Authorization: Bearer <apiKey>` on every admin request. A blank (empty or
    * whitespace-only) value throws {@link InvalidDefinition} — omit it to connect without auth. */
@@ -1067,6 +1075,11 @@ export interface EmbeddedOptions {
    * load imposters, then let main return; the process serves until killed or `close()`d. Default
    * false: an idle engine never blocks process exit (awaited calls always complete either way). */
   keepAlive?: boolean;
+  /** Outbound TLS trust for `proxy` stubs and the intercept relay (engine >= 0.18.0). Sent on the
+   * loopback admin plane's `rift_serve_admin`, which is started eagerly when this is set so every
+   * imposter and intercept listener sees it; refused up front when the engine does not advertise
+   * the key. See {@link UpstreamTrust}. */
+  upstreamTrust?: UpstreamTrust;
 }
 
 // The specifier lives in a const so tsc does NOT type-resolve the import: core must compile before

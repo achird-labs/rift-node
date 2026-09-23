@@ -531,6 +531,43 @@ interface PredicateGenerator {
 `ProxyBuilder` extends `ResponseBuilder`, so behavior chainers stay legal on a proxy response and
 are emitted — the pre-M7 silent drop of `proxyTo(...).latency(500)` is gone (#23).
 
+#### Recording an origin behind a private CA (`upstreamTrust`)
+
+The engine's `proxy` client trusts the OS certificate store; an origin issued by a private or
+corporate CA fails with `invalid peer certificate: UnknownIssuer` until that CA is added. Since engine
+0.18.0 the trust is a per-engine option, one policy per engine, set where the engine is started:
+
+```ts
+type UpstreamTrust =
+  | { caFile: string }      // PEM file, APPENDED to the OS trust store (path resolved at option time)
+  | { caPem: string }       // the same anchor inline — embedded only, the CLI has no inline flag
+  | { skipVerify: true };   // accept any certificate; development only, the SDK emits a process warning
+
+await using engine = await rift.spawn({ upstreamTrust: { caFile: 'certs/corp-ca.pem' } });
+await using engine = await rift.embedded({ upstreamTrust: { caPem: fs.readFileSync('corp-ca.pem', 'utf8') } });
+```
+
+| Variant | spawn | embedded | connect |
+|---|---|---|---|
+| `{ caFile }` | `--upstream-ca-file` | `upstreamCaFile` serve option | — |
+| `{ caPem }` | **throws `InvalidDefinition`** (pass `caFile`) | `upstreamCaPem` serve option | — |
+| `{ skipVerify: true }` | `--upstream-tls-skip-verify` | `upstreamTlsSkipVerify` serve option | — |
+
+`connect()` takes no trust: it belongs to whoever started that engine. The same trust governs
+`https:` config sources and the intercept tunnel's WebSocket relay (§7).
+
+**Older engines are refused, never ignored.** On spawn the resolved binary's version is probed
+(like `intercept.auth`): below 0.18.0, or unrecognisable, `EngineVersionError`. On embedded the gate
+is *presence*, never the version — a cdylib before 0.17.0 has no list and ignores an unknown serve
+key rather than refusing it; from 0.17.0 on the list is authoritative — so the exact key must appear
+in `rift_build_info().serveOptions` (`engine.buildInfo().serveOptions` on the embedded transport),
+else `EngineUnavailable`. Setting `upstreamTrust` also starts the embedded loopback admin plane
+eagerly: the engine installs the trust inside `rift_serve_admin`, and an imposter or intercept
+listener created before that call would keep the default trust.
+
+Not `SSL_CERT_FILE`: the engine honours it, but it **replaces** the trust store, so pointing it at
+a lone private CA silently drops every public root. `caFile` appends, which is why it exists.
+
 ### 5.7 Scripts
 
 ```ts
@@ -778,6 +815,8 @@ interface SpawnOptions {
                                                   // spawn on an unevaluated tag, this is the way through)
   defaultTls?: { cert: string; key: string };     // --default-tls-cert/key
   metricsPort?: number;
+  upstreamTrust?: UpstreamTrust;                  // --upstream-ca-file | --upstream-tls-skip-verify (engine >= 0.18.0,
+                                                  // version-probed); caPem throws — see §5.6
   intercept?: boolean | InterceptOptions;         // --intercept-port (+ CA paths, + auth)
 }
 ```
@@ -861,6 +900,9 @@ interface EmbeddedOptions {
   download?: boolean;               // default true; false = resolve offline or throw
   versionCheck?: 'fail' | 'warn' | 'off';
   requireFeatures?: string[];
+  upstreamTrust?: UpstreamTrust;    // rift_serve_admin upstreamCaFile|upstreamCaPem|upstreamTlsSkipVerify;
+                                    // gated on buildInfo().serveOptions; starts the admin plane
+                                    // eagerly — see §5.6
   keepAlive?: boolean;              // #70: hold the process alive while the engine is open —
                                     // the standalone mock-server shape. Default false: an idle
                                     // engine never blocks exit (awaited calls always complete).
