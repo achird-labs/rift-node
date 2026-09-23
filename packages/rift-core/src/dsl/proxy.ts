@@ -6,6 +6,7 @@
  */
 
 import type { JsonValue, ProxyResponse, StubResponse } from '../model/index.js';
+import { assertSingleValuedHeaderNames } from './header-names.js';
 import { ResponseBuilder } from './response.js';
 
 /** A `predicateGenerators` entry: which request fields seed predicates on a recorded match. */
@@ -60,9 +61,13 @@ export class ProxyBuilder extends ResponseBuilder {
     return this.patch({ addDecorateBehavior: jsFn });
   }
 
-  /** Accumulates a header into `proxy.injectHeaders`, sent upstream on every proxied call. */
+  /** Accumulates a header into `proxy.injectHeaders`, sent upstream on every proxied call — one
+   * entry per name, case-insensitive: the same spelling replaces, a second spelling throws
+   * `InvalidDefinition` (the engine refuses it with a 400 since 0.18.0). */
   injectHeader(name: string, value: string): this {
-    return this.patch({ injectHeaders: { ...this.config.injectHeaders, [name]: value } });
+    const injectHeaders = { ...this.config.injectHeaders, [name]: value };
+    assertSingleValuedHeaderNames(injectHeaders, 'proxy.injectHeaders', 'injectHeader()');
+    return this.patch({ injectHeaders });
   }
 
   /** Sets `proxy.pathRewrite`. */

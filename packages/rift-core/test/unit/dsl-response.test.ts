@@ -217,6 +217,58 @@ describe('DSL #23 — loud failures (no silent drop/misroute)', () => {
 });
 
 describe('DSL #23 — proxy builder', () => {
+  it('injectHeader() refuses a case-variant of an existing name, naming both spellings (issue #145)', () => {
+    // `proxy.injectHeaders` is single-valued: engine 0.18.0 refuses a second spelling with a 400
+    // ("header `X-Trace` is already given as `x-trace`"). Fail here, naming the builder call.
+    const build = () => proxyTo('http://u').injectHeader('x-trace', 'a').injectHeader('X-Trace', 'b');
+    expect(build).toThrow(InvalidDefinition);
+    expect(build).toThrow(/`X-Trace` is already given as `x-trace`/);
+    expect(build).toThrow(/injectHeader/);
+  });
+
+  it('injectHeader() with three spellings throws on the first collision (issue #145)', () => {
+    expect(() =>
+      proxyTo('http://u').injectHeader('X-Id', '1').injectHeader('X-Other', '2').injectHeader('x-id', '3')
+    ).toThrow(/`x-id` is already given as `X-Id`/);
+  });
+
+  it('injectHeader() with the same spelling twice replaces the value (issue #145)', () => {
+    const r = proxyTo('http://u').injectHeader('X-A', '1').injectHeader('X-A', '2').build();
+    expect(r.proxy).toMatchObject({ injectHeaders: { 'X-A': '2' } });
+  });
+
+  it('injectHeader() folds ASCII case only, as the engine does — non-ASCII pairs stay distinct (issue #145)', () => {
+    // The engine compares with `eq_ignore_ascii_case`; a Unicode fold would wrongly collide these.
+    const r = proxyTo('http://u').injectHeader('ß', '1').injectHeader('SS', '2').injectHeader('İ', '3').build();
+    expect(r.proxy).toMatchObject({ injectHeaders: { ß: '1', SS: '2', İ: '3' } });
+  });
+
+  it('Fault.error() with an empty headers map is a no-op for the check (issue #145)', () => {
+    const r = ok().withFault(Fault.error({ status: 503, headers: {} })).build();
+    expect(r._rift).toEqual({ fault: { error: { probability: 1.0, status: 503, headers: {} } } });
+  });
+
+  it('Fault.error() refuses case-variant duplicate header names (issue #145)', () => {
+    const build = () => Fault.error({ status: 503, headers: { 'x-a': '1', 'X-A': '2' } });
+    expect(build).toThrow(InvalidDefinition);
+    expect(build).toThrow(/`X-A` is already given as `x-a`/);
+    expect(build).toThrow(/Fault\.error/);
+  });
+
+  it('Fault.error() keeps distinct header names (issue #145)', () => {
+    const r = ok().withFault(Fault.error({ status: 503, headers: { 'X-A': '1', 'X-B': '2' } })).build();
+    expect(r._rift).toEqual({
+      fault: { error: { probability: 1.0, status: 503, headers: { 'X-A': '1', 'X-B': '2' } } },
+    });
+  });
+
+  it('is.headers keeps case-variant names as separate keys — multi-valued, out of #145 scope', () => {
+    // The engine folds case variants of a multi-valued header into one entry (rift#1039); that is
+    // how a stub sends two Set-Cookie lines, so the DSL must not refuse it here.
+    const r = ok().header('x-a', '1').header('X-A', '2').build();
+    expect(r.is?.headers).toEqual({ 'x-a': '1', 'X-A': '2' });
+  });
+
   it('full proxy: mode, generators, wait/decorate, injectHeaders, pathRewrite, clientCert', () => {
     const r = proxyTo('http://up.example')
       .proxyAlways()

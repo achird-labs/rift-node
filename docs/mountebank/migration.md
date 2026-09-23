@@ -129,7 +129,7 @@ coexist; a second fault of the *same* kind throws rather than silently overwriti
 | `{ proxy: { predicateGenerators: [...] } }` | `.generatePredicates({ matches: { path: true, method: true } })` |
 | `{ proxy: { addWaitBehavior: true } }` | `.addWaitBehavior()` |
 | `{ proxy: { addDecorateBehavior: 'fn' } }` | `.addDecorateBehavior('fn')` |
-| `{ proxy: { injectHeaders: { 'X-Foo': 'bar' } } }` | `.injectHeader('X-Foo', 'bar')` (accumulates) |
+| `{ proxy: { injectHeaders: { 'X-Foo': 'bar' } } }` | `.injectHeader('X-Foo', 'bar')` (one entry per name, case-insensitive; a second spelling throws) |
 | Rift extension: `{ proxy: { pathRewrite: { from, to } } }` | `.rewritePath(from, to)` |
 | `{ proxy: { key, cert } }` (mTLS to upstream) | `.clientCert({ key, cert })` |
 | `proxyTo(...).latency(500)` | Same call — behaviors are legal on a proxy response (the pre-DSL bridge silently dropped these; the current builder doesn't) |
