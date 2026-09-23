@@ -140,6 +140,14 @@ ok().binaryBody(uint8ArrayOrBase64String) // base64-encodes a Uint8Array; a stri
 ok(template).templated()               // marks the body for engine-side template rendering
 ```
 
+**Flow-state writes** (engine ≥ 0.18.0) run after an `is` response, in order, without a script —
+see [Scenarios §Writing flow state](scenarios.md#writing-flow-state-declaratively):
+
+```ts
+ok('{{ state.hits }}').templated().incrementState('hits')   // shows the count, then bumps it
+ok().setState('user', '{{ request.query.u }}').deleteState('tmp').clearFlowState()
+```
+
 **Response cycling.** `.willReturn(r1, r2, ...)` sets the response cycle the engine advances
 through on successive matching calls. `.respond(...)` is an alias. Repeated `.willReturn()` calls
 on the same stub **append** to the same cycle rather than replacing it:

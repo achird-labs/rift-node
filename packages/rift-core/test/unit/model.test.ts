@@ -104,6 +104,38 @@ describe('wire model — 0.18.0 read-path shapes (issue #150)', () => {
   });
 });
 
+describe('wire model — _rift.stateOps (issue #149)', () => {
+  it('round-trips every op byte-exact, `by` absent or present, and an op it does not know', () => {
+    const imposter: Imposter = {
+      port: 4546,
+      protocol: 'http',
+      stubs: [
+        {
+          responses: [
+            {
+              is: { statusCode: 200 },
+              _rift: {
+                stateOps: [
+                  { op: 'set', key: 'user', value: '{{ request.query.u }}' },
+                  { op: 'increment', key: 'hits' },
+                  { op: 'increment', key: 'hits', by: -3 },
+                  { op: 'delete', key: 'tmp' },
+                  { op: 'clearFlow' },
+                  { op: 'future', key: 'k' } as never,
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    };
+    expect(toWireJson(fromJson(imposter))).toEqual(imposter);
+    const ops = (fromJson(imposter) as Imposter).stubs?.[0]?.responses?.[0]?._rift?.stateOps;
+    expect(ops?.[1]).toEqual({ op: 'increment', key: 'hits' });
+    expect(JSON.stringify(ops?.[1])).toBe('{"op":"increment","key":"hits"}');
+  });
+});
+
 describe('wire model — HTTPS client-auth keys (issue #137)', () => {
   it('round-trips both ca spellings byte-exact and types them', () => {
     const one = { port: 4443, protocol: 'https', mutualAuth: true, rejectUnauthorized: true, ca: 'PEM-A', stubs: [] };

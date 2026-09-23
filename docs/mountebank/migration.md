@@ -83,6 +83,7 @@ raw `wire.Predicate` as an escape hatch.
 | `{ is: { headers: { 'Set-Cookie': ['a', 'b'] } } }` | `.header('Set-Cookie', ['a', 'b'])` (multi-value) |
 | `{ is: { body: '<base64>', _mode: 'binary' } }` | `.binaryBody(uint8ArrayOrBase64String)` |
 | `{ is: {...}, _rift: { templated: true } }` | `.templated()` |
+| `{ is: {...}, _rift: { stateOps: [{ op: 'increment', key: 'hits' }] } }` (no Mountebank equivalent — an `inject` that mutates `state`) | `.incrementState('hits')`, `.setState()`, `.deleteState()`, `.clearFlowState()`, `.stateOps(...)` (engine ≥ 0.18.0) |
 | `stubs[0].responses` with N entries (Mountebank cycles them per matching call) | `.willReturn(r1, r2, r3)` — repeated `.willReturn()` calls **append** to the same cycle |
 | `{ inject: 'function(config){...}' }` | `inject('function(config){...}')` |
 

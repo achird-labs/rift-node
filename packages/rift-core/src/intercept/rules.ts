@@ -30,6 +30,7 @@ const BEHAVIOR_METHODS: Record<string, string> = {
 const RIFT_METHODS: Record<string, string> = {
   script: 'script()',
   templated: 'templated()',
+  stateOps: 'stateOps()',
 };
 
 const FAULT_METHODS: Record<string, string> = {

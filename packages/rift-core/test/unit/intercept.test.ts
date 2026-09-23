@@ -413,6 +413,8 @@ describe('issue #101 — serve() normalizes the response into the engine ServeSt
     expect(await serveError(ok('x').templated())).toContain('templated()');
     expect(await serveError(ok('x').script({ code: 'return 1' }))).toContain('_rift.script');
     expect(await serveError(ok('x').script({ code: 'return 1' }))).toContain('script()');
+    expect(await serveError(ok('x').incrementState('hits'))).toContain('_rift.stateOps');
+    expect(await serveError(ok('x').incrementState('hits'))).toContain('stateOps()');
     // The fault family carries a method annotation too — that is the whole "name the caller's own
     // spelling" guarantee, so assert it here and not only the wire key.
     expect(await serveError(ok('x').withFault(Fault.latency(50)))).toContain('_rift.fault.latency');
