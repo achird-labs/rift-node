@@ -156,6 +156,8 @@ export async function createEmbeddedEngine(
   // No `onClose` hook: `Engine.close()` already awaits `adminClient.close()` (== `admin.close()`)
   // unconditionally — there's no separate spawned process to tear down for the embedded transport.
   return new Engine(admin, 'embedded', {
+    engineVersion: buildInfo.version,
+    versionCheck: options.versionCheck ?? 'fail',
     buildInfo: async () => admin.buildInfo,
     adminUrl: () => admin.adminUrl(),
     interceptBackend: new EmbeddedInterceptBackend(native),

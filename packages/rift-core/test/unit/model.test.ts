@@ -104,6 +104,23 @@ describe('wire model — 0.18.0 read-path shapes (issue #150)', () => {
   });
 });
 
+describe('wire model — HTTPS client-auth keys (issue #137)', () => {
+  it('round-trips both ca spellings byte-exact and types them', () => {
+    const one = { port: 4443, protocol: 'https', mutualAuth: true, rejectUnauthorized: true, ca: 'PEM-A', stubs: [] };
+    const many = { port: 4444, protocol: 'https', mutualAuth: true, rejectUnauthorized: true, ca: ['PEM-A', 'PEM-B'], stubs: [] };
+    expect(toWireJson(fromJson(one))).toEqual(one);
+    expect(toWireJson(fromJson(many))).toEqual(many);
+    const parsed = fromJson(many) as Imposter;
+    expect(parsed.rejectUnauthorized).toBe(true);
+    expect(parsed.ca).toEqual(['PEM-A', 'PEM-B']);
+  });
+
+  it('a combination the engine refuses still decodes — the model validates nothing', () => {
+    const refused = { port: 4445, protocol: 'http', rejectUnauthorized: true, ca: [], stubs: [] };
+    expect(toWireJson(fromJson(refused))).toEqual(refused);
+  });
+});
+
 describe('wire model — port preservation (ledger port-clobber regression)', () => {
   it('preserves an explicit port verbatim through fromJson→toWireJson', () => {
     const cfg = fromJson('{"imposters":[{"port":4545,"protocol":"http","stubs":[]}]}') as ImpostersConfig;

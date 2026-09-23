@@ -32,6 +32,83 @@ describe('DSL #24 — HTTPS / mTLS', () => {
       mutualAuth: true,
     });
   });
+  const CA1 = '-----BEGIN CERTIFICATE-----\nAAA\n-----END CERTIFICATE-----\n';
+  const CA2 = '-----BEGIN CERTIFICATE-----\nBBB\n-----END CERTIFICATE-----\n';
+
+  it('requireClientCertificate() emits mutualAuth only, and sets protocol https (issue #137)', () => {
+    expect(imposter('s').requireClientCertificate().build()).toEqual({ name: 's', protocol: 'https', mutualAuth: true });
+  });
+
+  it('requireClientCertificate([pem]) emits all three keys, one anchor as a bare string (issue #137)', () => {
+    // The engine echoes one anchor back as a string and several as an array; emitting the same
+    // spelling keeps toJson() byte-equal to what was posted.
+    expect(imposter('s').requireClientCertificate([CA1]).build()).toEqual({
+      name: 's',
+      protocol: 'https',
+      mutualAuth: true,
+      rejectUnauthorized: true,
+      ca: CA1,
+    });
+  });
+
+  it('requireClientCertificate([a, b]) emits the anchors as an array (issue #137)', () => {
+    expect(imposter('s').requireClientCertificate([CA1, CA2]).build()).toMatchObject({ rejectUnauthorized: true, ca: [CA1, CA2] });
+  });
+
+  it('a later requireClientCertificate() call replaces — including dropping the CA (issue #137)', () => {
+    const imp = imposter('s').requireClientCertificate([CA1]).requireClientCertificate().build();
+    expect(imp).toEqual({ name: 's', protocol: 'https', mutualAuth: true });
+  });
+
+  it('refuses a PEM without a certificate block and an empty array (issue #137)', () => {
+    expect(() => imposter('s').requireClientCertificate(['not a pem'])).toThrow(InvalidDefinition);
+    expect(() => imposter('s').requireClientCertificate(['not a pem'])).toThrow(/BEGIN CERTIFICATE/);
+    // `[]` would read as "validate against nothing" == accept any certificate; say so instead.
+    expect(() => imposter('s').requireClientCertificate([])).toThrow(InvalidDefinition);
+    expect(() => imposter('s').requireClientCertificate([CA1, ''])).toThrow(InvalidDefinition);
+  });
+
+  it('client-auth keys on a non-https protocol throw at build(), whichever order (issue #137)', () => {
+    // The engine 400s `mutualAuth: true` on http; catch it locally, and after the call too, since
+    // `.protocol('http')` can follow `.requireClientCertificate()`.
+    expect(() => imposter('s').requireClientCertificate().protocol('http').build()).toThrow(InvalidDefinition);
+    expect(() => imposter('s').requireClientCertificate([CA1]).protocol('h2c').build()).toThrow(/https/);
+    // `mutualAuth: false` is valid on any protocol and must not trip it.
+    expect(imposter('s').https({ mutualAuth: false }).protocol('http').build()).toEqual({ name: 's', protocol: 'http', mutualAuth: false });
+  });
+
+  it('requireClientCertificate([...]) keeps its keys when https({ cert, key }) comes after it (issue #137)', () => {
+    expect(imposter('s').requireClientCertificate([CA1]).https({ cert: 'C', key: 'K' }).build()).toMatchObject({
+      protocol: 'https',
+      cert: 'C',
+      key: 'K',
+      mutualAuth: true,
+      rejectUnauthorized: true,
+      ca: CA1,
+    });
+  });
+
+  it('https({ mutualAuth: false }) after requireClientCertificate([...]) is refused at build() — the engine 400s it (issue #137)', () => {
+    expect(() => imposter('s').requireClientCertificate([CA1]).https({ mutualAuth: false }).build()).toThrow(InvalidDefinition);
+    expect(() => imposter('s').requireClientCertificate([CA1]).https({ mutualAuth: false }).build()).toThrow(/need mutualAuth: true/);
+    // Without anchors there is nothing left to refuse: mutualAuth: false alone is valid on any protocol.
+    expect(imposter('s').requireClientCertificate().https({ mutualAuth: false }).protocol('http').build()).toEqual({
+      name: 's',
+      protocol: 'http',
+      mutualAuth: false,
+    });
+  });
+
+  it('raw() is the unchecked escape hatch: it can carry a combination build() would refuse (issue #137)', () => {
+    // Deliberate, and the same rule as the model layer — the engine is the authority on raw JSON.
+    expect(imposter('s').raw({ mutualAuth: true, protocol: 'http' }).build()).toEqual({ name: 's', mutualAuth: true, protocol: 'http' });
+  });
+
+  it('requireClientCertificate() survives every other chain method (issue #137)', () => {
+    const imp = imposter('s').port(4443).record().https({ cert: 'C', key: 'K' }).requireClientCertificate([CA1]).allowCORS().build();
+    expect(imp).toMatchObject({ port: 4443, recordRequests: true, cert: 'C', key: 'K', mutualAuth: true, rejectUnauthorized: true, ca: CA1, allowCORS: true });
+  });
+
   it('https() with no args sets only protocol https (engine self-signed)', () => {
     const imp = imposter('s').https().build();
     expect(imp.protocol).toBe('https');

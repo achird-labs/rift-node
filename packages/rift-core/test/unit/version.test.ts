@@ -69,8 +69,10 @@ describe('version — isAtLeastVersion fails closed', () => {
 });
 
 describe('version — extractEngineVersion', () => {
-  it('reads options.version from a /config body', () => {
+  it('reads the top-level version the engine actually writes (issue #167), then options.version', () => {
+    expect(extractEngineVersion({ version: '0.18.0', commit: 'af0fa19', options: { port: 2525 } })).toBe('0.18.0');
     expect(extractEngineVersion({ options: { version: '0.17.0' } })).toBe('0.17.0');
+    expect(extractEngineVersion({ version: '0.18.0', options: { version: '0.17.0' } })).toBe('0.18.0');
   });
 
   it('returns undefined for every shape that does not carry one', () => {
@@ -79,6 +81,6 @@ describe('version — extractEngineVersion', () => {
     expect(extractEngineVersion({ options: null })).toBeUndefined();
     expect(extractEngineVersion({ options: 'nope' })).toBeUndefined();
     expect(extractEngineVersion({ options: { version: 17 } })).toBeUndefined();
-    expect(extractEngineVersion({ version: '0.17.0' })).toBeUndefined();
+    expect(extractEngineVersion({ version: 18 })).toBeUndefined();
   });
 });

@@ -7,6 +7,24 @@ All notable changes to `@rift-vs/rift` are documented here. This project adheres
 
 ### Added
 
+- **`imposter().requireClientCertificate(caPems?)` — mutual TLS on HTTPS imposters** (issue #137).
+  Engine 0.18.0 honours `mutualAuth`, `rejectUnauthorized` and `ca` (rift#977); before, the keys
+  were dropped on parse and a listener documented as requiring client certificates accepted
+  everyone. With no anchors the builder emits `mutualAuth: true` (any client certificate); with
+  anchors it adds `rejectUnauthorized: true` and `ca` — one anchor as a bare string, several as an
+  array, the spelling the engine echoes back. Both set `protocol: 'https'`, and `build()` refuses
+  the keys on any other protocol (the engine 400s them). `Imposter` types `rejectUnauthorized`/`ca`.
+
+  Fail closed on older engines: these are imposter keys, not serve options, so `create()` and
+  `replaceAll()` gate on the engine version — a version below 0.18.0, or one that cannot be read,
+  throws `EngineVersionError` naming the feature and the remedies, since that engine would ignore
+  the keys and accept every client. `connect()` and `embedded()` record the version their startup
+  check found; spawn resolves it once from `/config` on first need (a failed lookup is retried, not
+  cached). `versionCheck: 'off'` (connect / embedded) skips the gate and `'warn'` lets an unreadable
+  version through, as it did at startup; `engine.admin` is the raw surface and is never gated. The replayable list export echoes the three keys with `cert`/`key`; the per-imposter
+  GET is a runtime view and omits all five. The existing `https({ mutualAuth: true })` now really requires a client certificate on
+  0.18.0, and the docs say so. No conformance fixture, per the cross-SDK issue.
+
 - **`upstreamTrust` — the engine's outbound TLS trust, on `rift.spawn()` and `rift.embedded()`**
   (issue #136). Recording against an origin issued by a private CA failed with
   `invalid peer certificate: UnknownIssuer` and nothing in the SDK could change that; since engine
@@ -138,6 +156,12 @@ All notable changes to `@rift-vs/rift` are documented here. This project adheres
   `InvalidDefinition`. Any call it now rejects was already not doing what it appeared to do.
 
 ### Fixed
+
+- **`rift.connect()` failed against every real engine under the default `versionCheck: 'fail'`**
+  (issue #167): the SDK read the version from `options.version`, but the engine's `GET /config`
+  has always written it at the top level, so connect threw "could not determine the connected
+  engine version" unless the check was `'warn'` or `'off'`. The top-level `version` is read first;
+  `options.version` stays as a fallback.
 
 - **`engine.intercept({ caCertPath, caKeyPath })` on the spawn and remote transports is refused
   instead of silently dropped** (issue #129, absorbing #134). Those transports attach to a listener

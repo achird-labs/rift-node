@@ -18,6 +18,7 @@ class FakeAdminApi implements AdminApi {
   #closed = false;
   #nextPort = 5000;
   configVersion: string | undefined = '0.99.0';
+  configCalls = 0;
   configCommit: string | undefined;
   configBuiltAt: string | undefined;
   url?: string;
@@ -133,6 +134,7 @@ class FakeAdminApi implements AdminApi {
     this.flow.delete(`${flowId}/${key}`);
   }
   async config(): Promise<Record<string, unknown>> {
+    this.configCalls++;
     const options: Record<string, unknown> = {};
     if (this.configVersion !== undefined) options['version'] = this.configVersion;
     if (this.configCommit !== undefined) options['commit'] = this.configCommit;
@@ -348,6 +350,94 @@ describe('issue #21 — RiftEngine facade over AdminApi', () => {
     admin.configBuiltAt = '2026-07-09T00:00:00Z';
     const info = await engineOf(admin).buildInfo();
     expect(info).toMatchObject({ version: '0.14.0', commit: 'abc1234', builtAt: '2026-07-09T00:00:00Z' });
+  });
+
+  describe('client-auth keys need engine >= 0.18.0 — fail closed (issue #137)', () => {
+    const CA = '-----BEGIN CERTIFICATE-----\nAAA\n-----END CERTIFICATE-----\n';
+    const mtls = () => imposter('s').port(4443).https({ cert: 'C', key: 'K' }).requireClientCertificate([CA]);
+
+    it('refuses create() and replaceAll() against a known older engine, naming the feature and the remedies', async () => {
+      const admin = new FakeAdminApi();
+      const engine = new Engine(admin, 'remote', { hostHint: '127.0.0.1', engineVersion: '0.17.0' });
+      for (const attempt of [() => engine.create(mtls()), () => engine.replaceAll([imposter('ok').port(1), mtls()])]) {
+        const err = await attempt().catch((e: unknown) => e);
+        expect(err).toBeInstanceOf(EngineVersionError);
+        expect((err as EngineVersionError).found).toBe('0.17.0');
+        expect((err as EngineVersionError).required).toBe('0.18.0');
+        expect((err as Error).message).toMatch(/needs rift >= 0\.18\.0/);
+        expect((err as Error).message).toMatch(/would accept every client/);
+        expect((err as Error).message).toMatch(/versionCheck: 'off'/);
+      }
+      // Nothing reached the engine — an older engine would have created a listener accepting everyone.
+      expect(admin.imposters.size).toBe(0);
+    });
+
+    it('gates a wire Imposter object too, and ignores the keys set to false (what an old engine does anyway)', async () => {
+      const engine = new Engine(new FakeAdminApi(), 'remote', { hostHint: '127.0.0.1', engineVersion: '0.17.0' });
+      await expect(engine.create({ port: 4443, protocol: 'https', mutualAuth: true })).rejects.toThrow(EngineVersionError);
+      await expect(engine.create({ port: 4444, protocol: 'https', ca: CA })).rejects.toThrow(EngineVersionError);
+      await expect(engine.create({ port: 4445, protocol: 'https', mutualAuth: false })).resolves.toBeDefined();
+      await expect(engine.create({ port: 4446, protocol: 'https', rejectUnauthorized: false })).resolves.toBeDefined();
+    });
+
+    it('passes at 0.18.0 and above', async () => {
+      for (const engineVersion of ['0.18.0', '0.19.3', '1.0.0']) {
+        const engine = new Engine(new FakeAdminApi(), 'remote', { hostHint: '127.0.0.1', engineVersion });
+        await expect(engine.create(mtls())).resolves.toBeDefined();
+      }
+    });
+
+    it("versionCheck: 'off' sends unchecked", async () => {
+      const off = new Engine(new FakeAdminApi(), 'remote', { hostHint: '127.0.0.1', engineVersion: '0.17.0', versionCheck: 'off' });
+      await expect(off.create(mtls())).resolves.toBeDefined();
+    });
+
+    it("an unreadable version is refused (can't-check is not a pass) unless versionCheck is 'warn'", async () => {
+      const unknown = new Engine(new FakeAdminApi(), 'remote', { hostHint: '127.0.0.1', engineVersion: 'dev-build' });
+      const err = await unknown.create(mtls()).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(EngineVersionError);
+      expect((err as Error).message).toMatch(/could not be read \(dev-build\)/);
+      const none = new FakeAdminApi();
+      none.configVersion = undefined;
+      await expect(new Engine(none, 'spawn', { hostHint: '127.0.0.1' }).create(mtls())).rejects.toThrow(/none reported/);
+      const warn = new Engine(new FakeAdminApi(), 'remote', { hostHint: '127.0.0.1', engineVersion: 'dev-build', versionCheck: 'warn' });
+      await expect(warn.create(mtls())).resolves.toBeDefined();
+    });
+
+    it('does not point a spawn caller at versionCheck, which spawn does not have', async () => {
+      const admin = new FakeAdminApi();
+      admin.configVersion = '0.17.0';
+      const err = await new Engine(admin, 'spawn', { hostHint: '127.0.0.1' }).create(mtls()).catch((e: unknown) => e);
+      expect((err as Error).message).not.toMatch(/versionCheck/);
+    });
+
+    it('a failed /config lookup surfaces and is retried on the next create(), not cached', async () => {
+      const admin = new FakeAdminApi();
+      admin.configVersion = '0.18.0';
+      let failures = 1;
+      const real = admin.config.bind(admin);
+      admin.config = async () => {
+        if (failures-- > 0) throw new Error('engine still starting');
+        return real();
+      };
+      const engine = new Engine(admin, 'spawn', { hostHint: '127.0.0.1' });
+      await expect(engine.create(mtls())).rejects.toThrow('engine still starting');
+      await expect(engine.create(mtls())).resolves.toBeDefined();
+    });
+
+    it('resolves the version lazily from /config when the transport did not record one — once', async () => {
+      const admin = new FakeAdminApi();
+      admin.configVersion = '0.17.0';
+      const engine = new Engine(admin, 'spawn', { hostHint: '127.0.0.1' });
+      await expect(engine.create(mtls())).rejects.toThrow(/needs rift >= 0\.18\.0/);
+      await expect(engine.create(mtls())).rejects.toThrow(/needs rift >= 0\.18\.0/);
+      expect(admin.configCalls).toBe(1);
+      // An imposter without the keys never asks.
+      const plain = new FakeAdminApi();
+      plain.configVersion = '0.17.0';
+      await new Engine(plain, 'spawn', { hostHint: '127.0.0.1' }).create(imposter('p').port(2));
+      expect(plain.configCalls).toBe(0);
+    });
   });
 
   it('handle.url normalizes an any-interface hostHint (0.0.0.0) to loopback', async () => {

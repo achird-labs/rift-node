@@ -51,6 +51,8 @@ export class ImposterBuilder {
   private certValue: string | undefined;
   private keyValue: string | undefined;
   private mutualAuthValue: boolean | undefined;
+  private rejectUnauthorizedValue: boolean | undefined;
+  private caValue: string | string[] | undefined;
   private strictBehaviorsValue: boolean | undefined;
   private defaultForwardValue: string | undefined;
   private serviceNameValue: string | undefined;
@@ -89,6 +91,35 @@ export class ImposterBuilder {
     if (tls?.cert !== undefined) this.certValue = tls.cert;
     if (tls?.key !== undefined) this.keyValue = tls.key;
     if (tls?.mutualAuth !== undefined) this.mutualAuthValue = tls.mutualAuth;
+    return this;
+  }
+
+  /**
+   * Requires a client certificate on this HTTPS imposter (engine >= 0.18.0; older engines silently
+   * accepted every client). With no anchors, any certificate is accepted (`mutualAuth: true`); with
+   * anchors, the certificate must chain to one of them (`rejectUnauthorized: true`, `ca`). One
+   * anchor is written as a bare string and several as an array — the spelling the engine echoes
+   * back, so `toJson()` round-trips byte-equal. A later call replaces. Sets `protocol: 'https'`.
+   */
+  requireClientCertificate(caPems?: readonly string[]): this {
+    if (caPems !== undefined) {
+      // `[]` would read as "validate against nothing" — accept any certificate — which is the
+      // no-anchor overload's job, said out loud.
+      if (caPems.length === 0) {
+        throw new InvalidDefinition('requireClientCertificate([]) has no trust anchor; pass at least one PEM, or call it with no argument to accept any client certificate');
+      }
+      // Deliberately shallow: enough to catch a key or a path passed where a certificate belongs.
+      // The engine parses the PEM for real and 400s anything it cannot load.
+      for (const pem of caPems) {
+        if (typeof pem !== 'string' || !pem.includes('-----BEGIN CERTIFICATE-----')) {
+          throw new InvalidDefinition('requireClientCertificate: every trust anchor must contain a -----BEGIN CERTIFICATE----- block');
+        }
+      }
+    }
+    this.protocolValue = 'https';
+    this.mutualAuthValue = true;
+    this.rejectUnauthorizedValue = caPems === undefined ? undefined : true;
+    this.caValue = caPems === undefined ? undefined : caPems.length === 1 ? caPems[0] : [...caPems];
     return this;
   }
 
@@ -216,6 +247,23 @@ export class ImposterBuilder {
     if (this.certValue !== undefined) out.cert = this.certValue;
     if (this.keyValue !== undefined) out.key = this.keyValue;
     if (this.mutualAuthValue !== undefined) out.mutualAuth = this.mutualAuthValue;
+    if (this.rejectUnauthorizedValue !== undefined) out.rejectUnauthorized = this.rejectUnauthorizedValue;
+    if (this.caValue !== undefined) out.ca = this.caValue;
+    // The engine refuses these on any protocol but https with a 400; `.protocol('http')` can follow
+    // `.requireClientCertificate()`, so the check has to sit here rather than in the setter.
+    const clientAuth = this.mutualAuthValue === true || this.rejectUnauthorizedValue !== undefined || this.caValue !== undefined;
+    // `.https({ mutualAuth: false })` after `.requireClientCertificate([...])` leaves the anchors
+    // without the requirement — a combination the engine refuses with a 400.
+    if (this.rejectUnauthorizedValue === true && this.mutualAuthValue !== true) {
+      throw new InvalidDefinition(
+        'rejectUnauthorized / ca need mutualAuth: true — https({ mutualAuth: false }) cleared what requireClientCertificate(...) set'
+      );
+    }
+    if (clientAuth && this.protocolValue !== 'https') {
+      throw new InvalidDefinition(
+        `client-certificate authentication (mutualAuth / rejectUnauthorized / ca) needs protocol 'https', got ${JSON.stringify(this.protocolValue ?? 'http')}`
+      );
+    }
     if (this.strictBehaviorsValue !== undefined) out.strictBehaviors = this.strictBehaviorsValue;
     if (this.defaultForwardValue !== undefined) out.defaultForward = this.defaultForwardValue;
     if (this.serviceNameValue !== undefined) out.serviceName = this.serviceNameValue;

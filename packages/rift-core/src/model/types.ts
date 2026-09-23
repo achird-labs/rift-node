@@ -39,7 +39,15 @@ export interface Imposter {
   defaultResponse?: IsResponse;
   defaultForward?: string;
   allowCORS?: boolean;
+  /** Request AND require a client certificate (`https` only; engine >= 0.18.0 — older engines
+   * silently accepted every client). Alone it accepts any certificate. */
   mutualAuth?: boolean;
+  /** Validate the client certificate against `ca`; the engine refuses it without `ca`, or without
+   * `mutualAuth: true`. */
+  rejectUnauthorized?: boolean;
+  /** PEM trust anchor(s) a client certificate must chain to — the engine echoes one anchor back as
+   * a bare string and several as an array. */
+  ca?: string | string[];
   strictBehaviors?: boolean;
   /** Inline PEM for HTTPS. */
   cert?: string;

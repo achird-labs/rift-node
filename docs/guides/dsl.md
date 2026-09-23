@@ -29,7 +29,10 @@ import { imposter } from '@rift-vs/rift';
 
 imposter('users')
   .port(4545)
-  .https({ cert, key, mutualAuth: true }) // sets protocol: 'https' + inline PEM
+  .https({ cert, key })                   // sets protocol: 'https' + inline PEM
+  .requireClientCertificate([caPem])      // mTLS: client cert must chain to caPem (engine >= 0.18.0);
+                                          // no argument = any client cert; older engines accept everyone,
+                                          // so create() refuses below 0.18.0
   .record()          // recordRequests — required for verify()/recorded() to see anything
   .recordMatches()   // recordMatches — predicate-match diagnostics
   .allowCORS()
