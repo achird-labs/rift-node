@@ -773,6 +773,9 @@ interface SpawnOptions {
                                                   // str::trim (the engine's), so U+0085 counts
   localOnly?: boolean; ipWhitelist?: string[]; origin?: string;
   datadir?: string; configfile?: string;
+  noParse?: boolean;                               // --no-parse: load configfile verbatim, no EJS
+                                                  // (needs configfile; engine >= 0.18.0 fails the
+                                                  // spawn on an unevaluated tag, this is the way through)
   defaultTls?: { cert: string; key: string };     // --default-tls-cert/key
   metricsPort?: number;
   intercept?: boolean | InterceptOptions;         // --intercept-port (+ CA paths, + auth)

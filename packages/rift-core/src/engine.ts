@@ -1048,6 +1048,8 @@ async function spawnEngine(opts: SpawnOptions = {}): Promise<Engine> {
 // order (embedded compiles against core's d.ts, so core builds first). The embedded package
 // re-exports this type from its root, and its `createEmbeddedEngine` is typed structurally below.
 export interface EmbeddedOptions {
+  // No `configFile`/`noParse` here: this transport applies config from already-parsed JSON and
+  // does not expose the cdylib's `configFile`; if it ever does, `noParse` belongs beside it.
   /** Explicit cdylib path; beats `RIFT_FFI_LIB`. Passed straight through to `resolveCdylib`. */
   libPath?: string;
   /** Cdylib version to resolve when not pinned via `libPath`. Defaults to `resolveCdylib`'s own default. */

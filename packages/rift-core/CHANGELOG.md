@@ -7,6 +7,16 @@ All notable changes to `@rift-vs/rift` are documented here. This project adheres
 
 ### Added
 
+- **`rift.spawn({ configfile, noParse: true })`** (issue #138) maps to the engine's `--no-parse`: the
+  config file is loaded verbatim, with no EJS preprocessing, and so is the `POST /admin/reload` that
+  re-reads it. Since engine 0.18.0 a config file holding a tag the loader does not evaluate — a
+  literal `<%` in a response body included — fails the spawn, with the engine's own pointer at
+  `--no-parse` in the stderr `spawn()` reports; until now the SDK user could not follow it.
+  `noParse` without `configfile` throws `InvalidDefinition` before any binary is resolved — the
+  engine's CLI accepts that combination and silently does nothing with it. No version gate: the
+  flag predates this package's 0.12.0 floor (engine 0.2.0). The SDK's embedded transport does not
+  expose a config file (it applies already-parsed JSON), so nothing changes there.
+
 - **The wire model names the 0.18.0 read-path shapes** (issue #150). `GET /imposters`,
   `handle.toJson()` and `getImposter()` write a response's behaviors as an ordered `behaviors` array
   (one element per step, a multi-item `copy`/`lookup`/`shellTransform` split one per item) and lift

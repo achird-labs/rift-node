@@ -29,6 +29,17 @@ const DEFAULT_STARTUP_TIMEOUT_MS = 30000;
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 5000;
 const HEALTH_CHECK_INTERVAL_MS = 100;
 
+/** The engine's CLI accepts `--no-parse` alone and silently does nothing with it (only its FFI door
+ * refuses the combination), so the mistake would otherwise be invisible. Checked in `spawn()` ahead
+ * of binary resolution as well as in `buildSpawnArgs`, like the admin-key guard. */
+function assertNoParseHasConfigfile(opts: { noParse?: boolean; configfile?: string }): void {
+  if (opts.noParse === true && opts.configfile === undefined) {
+    throw new InvalidDefinition(
+      'noParse only changes how configfile is read, and no configfile was given; remove noParse or add a configfile'
+    );
+  }
+}
+
 /** The subset of {@link SpawnOptions} that shapes the engine's command line. */
 export interface SpawnArgsOptions {
   host?: string;
@@ -40,6 +51,7 @@ export interface SpawnArgsOptions {
   origin?: string;
   datadir?: string;
   configfile?: string;
+  noParse?: boolean;
   defaultTls?: { cert: string; key: string };
   metricsPort?: number;
   /** `auth` is deliberately absent: the credential travels on the child's ENVIRONMENT, never argv
@@ -78,6 +90,10 @@ export function buildSpawnArgs(port: number, opts: SpawnArgsOptions = {}): strin
   }
   if (opts.configfile !== undefined) {
     args.push('--configfile', opts.configfile);
+  }
+  assertNoParseHasConfigfile(opts);
+  if (opts.noParse === true) {
+    args.push('--no-parse');
   }
   if (opts.defaultTls !== undefined) {
     args.push('--default-tls-cert', opts.defaultTls.cert, '--default-tls-key', opts.defaultTls.key);
@@ -201,6 +217,11 @@ export interface SpawnOptions {
   datadir?: string;
   /** --configfile */
   configfile?: string;
+  /** --no-parse: load `configfile` verbatim, skipping EJS preprocessing (and the preprocessing of
+   * the `POST /admin/reload` that re-reads it). Since engine 0.18.0 a tag the loader does not
+   * evaluate — a literal `<%` in a body included — fails the spawn instead of being blanked, and
+   * this is the way through. Requires `configfile`. */
+  noParse?: boolean;
   /** --default-tls-cert / --default-tls-key */
   defaultTls?: { cert: string; key: string };
   /** --metrics-port */
@@ -309,6 +330,7 @@ export async function spawn(opts: SpawnOptions = {}, deps: SpawnDeps = defaultSp
   // Ahead of resolveBinary: a blank key is a caller mistake, so it should not cost a binary
   // download to discover, and the engine would only report it as an opaque child-process exit.
   const apiKey = resolveApiKey(opts.apiKey);
+  assertNoParseHasConfigfile(opts);
   const interceptEnabled = opts.intercept === true || (typeof opts.intercept === 'object' && opts.intercept !== null);
   const interceptAuth = typeof opts.intercept === 'object' && opts.intercept !== null ? opts.intercept.auth : undefined;
   // Validate the option before anything is resolved, like the admin key: a credential that cannot
@@ -388,6 +410,7 @@ export async function spawn(opts: SpawnOptions = {}, deps: SpawnDeps = defaultSp
     origin: opts.origin,
     datadir: opts.datadir,
     configfile: opts.configfile,
+    noParse: opts.noParse,
     defaultTls: opts.defaultTls,
     metricsPort: opts.metricsPort,
     intercept,
