@@ -7,6 +7,19 @@ All notable changes to `@rift-vs/rift` are documented here. This project adheres
 
 ### Added
 
+- **`latency()`, `repeat()` and `binaryBody(string)` validate their arguments** (issue #146). Engine
+  0.18.0 refuses at the config door what these builders used to pass through: a fractional or
+  negative `wait` (rift#1162), a `{min, max}` range with `min > max` (rift#1148 — older engines
+  created the imposter and then dropped every connection), and a negative, fractional or
+  over-`u32` `repeat`; a `binaryBody` string the engine's `base64::STANDARD` cannot decode (bad
+  alphabet, padding, whitespace, or non-zero trailing bits) is served with
+  `x-rift-binary-error: true` or a 500 under `strictBehaviors` (rift#1151). Each now throws
+  `InvalidDefinition` at the call,
+  naming the builder, so the mistake is caught before any engine is involved and regardless of its
+  version. `repeat(0)` is refused as well: the engine accepts it but silently serves it as `1`. The
+  function-string `latency()` form, `Fault.latency()`, and the `.behavior()`/`.raw()` escape
+  hatches are unchanged.
+
 - **`InterceptOptions.auth` — a per-call intercept credential** (issue #124). The engine's intercept
   proxy takes a credential, but the SDK exposed no way to set one: the only channel was an ambient
   `RIFT_INTERCEPT_AUTH`, which is process-wide. Two engines in one process could not use different

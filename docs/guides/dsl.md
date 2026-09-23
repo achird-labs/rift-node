@@ -152,9 +152,9 @@ onPost('/api/users')
 Behaviors chain on any response builder and compose:
 
 ```ts
-ok().latency(500)                          // fixed delay, ms
-ok().latency({ min: 100, max: 500 })       // random range (Rift extension)
-ok().repeat(3)                              // repeat this response 3x before cycling on
+ok().latency(500)                          // fixed delay, ms — a non-negative integer
+ok().latency({ min: 100, max: 500 })       // random range (Rift extension) — 0 <= min <= max
+ok().repeat(3)                              // repeat this response 3x before cycling on — a positive integer
 ok().decorate('function(req,res){ ... }')
 ok().shellTransform('cmd1', 'cmd2')        // one string per command; multiple = chained
 ok().copy({ from: 'path', into: '${ID}', using: { method: 'regex', selector: '/users/(.+)' } })
@@ -165,7 +165,10 @@ ok().behavior({ /* raw _behaviors escape hatch */ })
 Execution order in-engine: **copy → lookup → decorate → wait**. `.latency()` never emits the
 Mountebank `wait: { inject: ... }` random-delay form — the engine's `WaitBehavior` parser only
 accepts a fixed number, a `{min,max}` range, or a JS function-source string; use the `{min,max}`
-form for a random range.
+form for a random range. A fractional or negative delay, an inverted range, a negative or fractional
+`repeat` and a `binaryBody` string that is not canonical base64 throw `InvalidDefinition` at the call
+— the engine refuses them (or serves a binary-error marker) since 0.18.0, and older engines dropped
+them silently. `repeat(0)` is refused too: the engine accepts it but silently serves it as `1`.
 
 ## Faults and proxying (brief)
 

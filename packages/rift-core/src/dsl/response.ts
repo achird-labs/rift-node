@@ -21,6 +21,21 @@ import { InvalidDefinition } from '../errors.js';
 import type { RiftFault, TcpFaultKind } from './fault.js';
 import type { ScriptSpec } from './script.js';
 
+/** What the engine's `base64::STANDARD` decoder accepts: standard alphabet, `=` padding, no
+ * whitespace, and zero trailing bits in the last symbol. `Buffer.from(s, 'base64')` is lenient on
+ * every one of those, so the check is a round trip — a string is canonical iff re-encoding its
+ * decode gives it back (`''`, an empty body, round-trips too). */
+function isCanonicalBase64(s: string): boolean {
+  return Buffer.from(s, 'base64').toString('base64') === s;
+}
+
+function isNonNegativeInteger(n: number): boolean {
+  return Number.isInteger(n) && n >= 0;
+}
+
+/** The engine reads `repeat` as a `u32`. */
+const MAX_REPEAT = 0xffff_ffff;
+
 const JSON_CONTENT_TYPE = 'application/json';
 const TEXT_CONTENT_TYPE = 'text/plain';
 
@@ -107,24 +122,52 @@ export class ResponseBuilder {
   }
 
   /**
-   * Sets `is.body` to base64 and `is._mode = 'binary'`. A `Uint8Array` is encoded; a `string` is
-   * trusted as already-base64.
+   * Sets `is.body` to base64 and `is._mode = 'binary'`. A `Uint8Array` is encoded; a `string` must
+   * already be canonical base64 (standard alphabet, `=` padding) — a body the engine cannot decode
+   * is served with `x-rift-binary-error: true`, or a 500 under `strictBehaviors`, so it is refused
+   * here instead.
    */
   binaryBody(data: Uint8Array | string): this {
+    if (typeof data === 'string' && !isCanonicalBase64(data)) {
+      throw new InvalidDefinition(
+        `binaryBody(string) must be canonical base64 (standard alphabet, = padding, no whitespace), got ${JSON.stringify(data)}; pass a Uint8Array to have it encoded`
+      );
+    }
     this.bodyValue = typeof data === 'string' ? data : Buffer.from(data).toString('base64');
     this.hasBody = true;
     this.binaryMode = true;
     return this;
   }
 
-  /** Sets `_behaviors.wait` — a fixed delay (ms), a `{min,max}` random range, or a bare fn-string. */
+  /** Sets `_behaviors.wait` — a fixed delay (ms), a `{min,max}` random range, or a bare fn-string.
+   * A number must be a non-negative integer and a range must satisfy `0 <= min <= max`: the engine
+   * refuses anything else at the config door (since 0.18.0; older engines dropped the block or, for
+   * an inverted range, dropped every connection). The fn-string form is not inspected. */
   latency(ms: number | { min: number; max: number } | string): this {
+    if (typeof ms === 'number' && !isNonNegativeInteger(ms)) {
+      throw new InvalidDefinition(`latency(ms) must be a non-negative integer of milliseconds, got ${String(ms)}`);
+    }
+    if (typeof ms === 'object') {
+      if (!isNonNegativeInteger(ms.min) || !isNonNegativeInteger(ms.max)) {
+        throw new InvalidDefinition(
+          `latency({min, max}) bounds must be non-negative integers of milliseconds, got {min: ${String(ms.min)}, max: ${String(ms.max)}}`
+        );
+      }
+      if (ms.min > ms.max) {
+        throw new InvalidDefinition(`latency({min, max}) has min ${ms.min} greater than max ${ms.max}`);
+      }
+    }
     this.behaviors = { ...this.behaviors, wait: ms };
     return this;
   }
 
-  /** Sets `_behaviors.repeat`. */
+  /** Sets `_behaviors.repeat` — a positive integer that fits a `u32`. The engine refuses a
+   * negative or fractional value; it accepts `0` but silently serves it as `1`, so `0` is refused
+   * here too — it can never mean what the author wrote. */
   repeat(n: number): this {
+    if (!Number.isInteger(n) || n < 1 || n > MAX_REPEAT) {
+      throw new InvalidDefinition(`repeat(n) must be a positive integer up to ${MAX_REPEAT}, got ${String(n)}`);
+    }
     this.behaviors = { ...this.behaviors, repeat: n };
     return this;
   }
