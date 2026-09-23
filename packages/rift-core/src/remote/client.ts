@@ -190,9 +190,12 @@ export class RemoteClient implements AdminApi {
   // --- spaces ---
 
   async addSpaceStub(port: number, flowId: string, stub: Stub): Promise<void> {
+    // Bare, not `{ stub }`: that envelope belongs to `POST /imposters/{port}/stubs`. The space
+    // route reads the stub object directly — engine 0.18.0 refuses the envelope (400), and older
+    // engines deserialized it as an empty stub that matched every request in the space (#142).
     await this.request(`/imposters/${port}/spaces/${encodeURIComponent(flowId)}/stubs`, {
       method: 'POST',
-      body: { stub },
+      body: stub,
       allowEmpty: true,
     });
   }
