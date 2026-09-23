@@ -129,7 +129,16 @@ export class ImposterBuilder {
     return this;
   }
 
-  /** Enables `recordMatches` (predicate-match diagnostics). */
+  /**
+   * Sets `recordMatches: true`, which no Rift engine acts on: Rift never recorded per-stub
+   * `matches`. Rift 0.18.0 and later report it as a `config_key_ignored` entry in the imposter's
+   * `_rift.warnings` and log a WARN when the imposter loads; earlier engines ignore it silently.
+   * The imposter is still created. There is no capability flag for this, so check the engine
+   * version. The key stays in the model for parse fidelity.
+   *
+   * @deprecated Has no effect. Use `record()` (`recordRequests`) and `recorded()` / `verify()` —
+   * or `GET /imposters/:port` — to see the requests an imposter served.
+   */
   recordMatches(): this {
     this.recordMatchesValue = true;
     return this;
@@ -174,7 +183,18 @@ export class ImposterBuilder {
     return this;
   }
 
-  /** Sets `_rift.metrics = { enabled: true }`, plus `port` when given. */
+  /**
+   * Sets `_rift.metrics = { enabled: true }` (plus `port`), which no Rift engine acts on: metrics
+   * are process-wide, served on `--metrics-port` (default 9090), and not configurable per imposter.
+   * Rift 0.18.0 and later report the key as a `config_key_ignored` entry in the imposter's
+   * `_rift.warnings` and log a WARN when the imposter loads; earlier engines ignore it silently.
+   * The imposter is still created. There is no capability flag for this, so check the engine
+   * version. The key stays in the model for parse fidelity.
+   *
+   * @deprecated Has no effect. Use `SpawnOptions.metricsPort` (`--metrics-port`) for the process-wide
+   * Prometheus scrape, which as of 0.18.0 populates the fault, script, flow-store and upstream
+   * families (rift#999).
+   */
   metrics(port?: number): this {
     this.riftMetrics = port !== undefined ? { enabled: true, port } : { enabled: true };
     return this;

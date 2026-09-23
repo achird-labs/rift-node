@@ -525,7 +525,8 @@ interface ProxyBuilder {
   injectHeader(name: string, value: string): this;                    // wire: injectHeaders — one entry per name,
                                                                       // case-insensitive; a second spelling throws
   rewritePath(from: string, to: string): this;                        // wire: pathRewrite (Rift ext)
-  clientCert(pem: { key: string; cert: string }): this;               // mTLS to upstream
+  /** @deprecated */ clientCert(pem: { key: string; cert: string }): this; // no effect: Rift's proxy sends no
+                                                                      // client certificate; dropped on parse
   latency(...) / repeat(...) / decorate(...) etc.                     // _behaviors now legal on proxy
   raw(patch: Partial<wire.StubResponse>): this;
   build(): wire.StubResponse;
@@ -627,7 +628,8 @@ interface ImposterBuilder {
                                                      // unreadable version → EngineVersionError (fail closed;
                                                      // versionCheck 'off' skips, 'warn' lets an unreadable
                                                      // version through). The raw engine.admin surface is not gated.
-  record(): this;  recordMatches(): this;  allowCORS(): this;
+  record(): this;  allowCORS(): this;
+  /** @deprecated */ recordMatches(): this;  // no effect on any engine; >= 0.18.0 reports config_key_ignored
   strictBehaviors(): this;
   defaultResponse(r: ResponseBuilder | wire.IsResponse): this;
   defaultForward(url: string): this;        // Rift: transparent forward for unmatched
@@ -639,7 +641,8 @@ interface ImposterBuilder {
                    flowIdSource?: 'imposter_port' | `header:${string}`;
                    redis?: { url: string; poolSize?: number; keyPrefix?: string } }): this;
   flowIdFromHeader(name: string): this;     // sugar: flowIdSource: `header:${name}`
-  metrics(port?: number): this;
+  /** @deprecated */ metrics(port?: number): this;  // no effect: metrics are process-wide (SpawnOptions.metricsPort);
+                                                   // >= 0.18.0 reports config_key_ignored
   scriptEngine(cfg: { defaultEngine?: 'rhai' | 'javascript'; timeoutMs?: number }): this;
   registerScript(name: string, spec: ScriptSpec): this;
   raw(patch: Partial<wire.Imposter>): this;
