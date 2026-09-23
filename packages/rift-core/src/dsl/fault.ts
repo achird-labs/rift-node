@@ -12,6 +12,7 @@
  */
 
 import type { JsonValue } from '../model/index.js';
+import { assertSingleValuedHeaderNames } from './header-names.js';
 
 export type TcpFaultKind =
   | 'CONNECTION_RESET_BY_PEER'
@@ -54,7 +55,10 @@ export const Fault = {
     const value: { [key: string]: JsonValue } = { probability: opts?.probability ?? 1.0 };
     if (spec.status !== undefined) value.status = spec.status;
     if (spec.body !== undefined) value.body = spec.body;
-    if (spec.headers !== undefined) value.headers = spec.headers;
+    if (spec.headers !== undefined) {
+      assertSingleValuedHeaderNames(spec.headers, '_rift.fault.error.headers', 'Fault.error()');
+      value.headers = spec.headers;
+    }
     return { kind: 'error', value };
   },
 

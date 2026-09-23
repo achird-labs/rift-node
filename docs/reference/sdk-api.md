@@ -479,7 +479,8 @@ interface ProxyBuilder {
   generatePredicates(...gens: PredicateGenerator[]): this;            // wire: predicateGenerators
   addWaitBehavior(on?: boolean): this;
   addDecorateBehavior(jsFn: string): this;
-  injectHeader(name: string, value: string): this;                    // wire: injectHeaders
+  injectHeader(name: string, value: string): this;                    // wire: injectHeaders — one entry per name,
+                                                                      // case-insensitive; a second spelling throws
   rewritePath(from: string, to: string): this;                        // wire: pathRewrite (Rift ext)
   clientCert(pem: { key: string; cert: string }): this;               // mTLS to upstream
   latency(...) / repeat(...) / decorate(...) etc.                     // _behaviors now legal on proxy

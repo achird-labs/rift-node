@@ -75,6 +75,14 @@ All notable changes to `@rift-vs/rift` are documented here. This project adheres
 
 ### Fixed
 
+- **A second spelling of a header name in `injectHeader()` or `Fault.error({ headers })` is refused
+  locally** (issue #145). Both fields are single-valued on the wire, and engine 0.18.0 refuses a
+  case-variant repeat (`x-trace` beside `X-Trace`) with a 400 naming both spellings (rift#1050); older
+  engines sent both as two header lines in hash order. The builders now throw `InvalidDefinition`
+  naming both spellings and the call, before anything is sent. The same spelling twice still
+  replaces, and multi-valued `is.headers` is untouched — the engine merges case variants there,
+  which is how a stub sends two `Set-Cookie` lines.
+
 - **`Headers`, `URLSearchParams`, `FormData`, `Blob`, `Request`, `Response`, `AbortController`,
   `AbortSignal` and `WeakRef` are refused instead of reaching the engine as `{}`** (issue #132).
   #126 guarded the ECMAScript slot-backed containers (`Map`, `Set`, …) and left out the host objects
