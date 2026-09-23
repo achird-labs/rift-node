@@ -138,6 +138,15 @@ export interface StubResponse {
   inject?: string;
   fault?: string;
   _behaviors?: Behaviors;
+  /** Mountebank's canonical spelling, and what `GET /imposters` writes since engine 0.18.0: one
+   * element per step in execution order (a multi-item `copy`/`lookup`/`shellTransform` is split one
+   * element per item), never a `{repeat}` element. Accepted on input too; when both spellings are
+   * present the engine uses `_behaviors` and ignores this array. Engine <= 0.17.0 wrote `{repeat}`
+   * inside the array. */
+  behaviors?: Behaviors[];
+  /** Response-level `repeat` — what `GET /imposters` writes since engine 0.18.0 (`0` is never
+   * written). Accepted on input and wins over `_behaviors.repeat`. */
+  repeat?: number;
   _rift?: RiftResponseExtension;
   // flat form (issue #304): statusCode/headers/body at the top level, no `is` wrapper
   statusCode?: number | string;
@@ -164,6 +173,21 @@ export interface RiftImposterConfig {
   proxy?: JsonValue;
   scriptEngine?: JsonValue;
   scripts?: { [name: string]: JsonValue };
+  /** Carrier only (engine >= 0.18.0, rift#978): round-tripped through `GET /imposters`, inert on
+   * standalone Rift, dropped on parse by engine <= 0.17.0. */
+  sequencing?: { mode?: string; [key: string]: JsonValue | undefined };
+  [key: string]: unknown;
+}
+
+/** A `lookup` named by dataset rather than by file path (engine >= 0.18.0, rift#973). `key` is the
+ * engine's `LookupKey` — `from` a copy source, `using` an extraction method — left open here. */
+export interface DatasetBinding {
+  name: string;
+  version?: number;
+  key: { from: JsonValue; using: JsonValue };
+  keyColumn: string;
+  into: string;
+  digest?: string;
   [key: string]: unknown;
 }
 
@@ -171,6 +195,9 @@ export interface RiftResponseExtension {
   fault?: JsonValue;
   script?: JsonValue;
   templated?: boolean;
+  /** Carrier only (engine >= 0.18.0, rift#973): round-tripped through `GET /imposters`, inert on
+   * standalone Rift, dropped on parse by engine <= 0.17.0. */
+  dataset?: DatasetBinding;
   [key: string]: unknown;
 }
 

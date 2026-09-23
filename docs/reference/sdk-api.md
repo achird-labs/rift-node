@@ -193,6 +193,9 @@ interface ImposterHandle extends AsyncDisposable {
   disable(): Promise<void>;
   clearProxyRecordings(): Promise<void>;   // DELETE savedProxyResponses
   toJson(opts?: { replayable?: boolean; removeProxies?: boolean }): Promise<wire.Imposter>;
+      // the read shape differs from what the DSL posts (engine >= 0.18.0): a response's behaviors come
+      // back as an ordered `behaviors` array plus a response-level `repeat`, not `_behaviors`; both
+      // are typed on wire.StubResponse and round-trip through fromJson unchanged
   delete(): Promise<void>;                 // [Symbol.asyncDispose] delegates here (idempotent)
 }
 ```

@@ -7,6 +7,17 @@ All notable changes to `@rift-vs/rift` are documented here. This project adheres
 
 ### Added
 
+- **The wire model names the 0.18.0 read-path shapes** (issue #150). `GET /imposters`,
+  `handle.toJson()` and `getImposter()` write a response's behaviors as an ordered `behaviors` array
+  (one element per step, a multi-item `copy`/`lookup`/`shellTransform` split one per item) and lift
+  `repeat` to the response (rift#1191, rift#1199, rift#1188); the SDK preserved both through its
+  index signatures but typed only `_behaviors`. `StubResponse.behaviors` and `StubResponse.repeat`
+  are now declared, as are the carrier fields the engine round-trips but does not act on standalone:
+  `_rift.dataset` (`DatasetBinding`, rift#973) on a response and `_rift.sequencing` on an imposter
+  (rift#978). The DSL still emits the object form; the engine accepts either, and when both are
+  present it uses `_behaviors` and ignores the `behaviors` array — a response-level `repeat`,
+  though, wins over `_behaviors.repeat`.
+
 - **`RecordedRequest.status`, `.latencyMs` and `.node`** (issue #148). Since engine 0.18.0 a
   journal entry records how it was answered (rift#364); the SDK already received the fields but
   only through `raw` with a cast. They are lifted onto the typed shape and documented: `undefined`

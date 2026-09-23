@@ -93,6 +93,7 @@ raw `wire.Predicate` as an escape hatch.
 | `_behaviors: { wait: 'function(){ return 500; }' }` | `.latency('function(){ return 500; }')` — never emit `{ inject: ... }` here; the engine's `WaitBehavior` parser only accepts the fn-string form |
 | Rift extension: latency range | `.latency({ min: 100, max: 500 })` |
 | `_behaviors: { repeat: 3 }` | `.repeat(3)` |
+| `{ is, repeat: 3 }` (response-level, what `GET /imposters` writes since engine 0.18.0) | accepted by `fromJson`/`create()` as-is; `.repeat(3)` emits `_behaviors.repeat`, and if a response-level `repeat` is also present the response-level one wins |
 | `_behaviors: { decorate: 'function(req,res){...}' }` | `.decorate('function(req,res){...}')` |
 | `_behaviors: { shellTransform: ['cmd1', 'cmd2'] }` | `.shellTransform('cmd1', 'cmd2')` |
 | `_behaviors: { copy: [{ from, into, using }] }` | `.copy({ from, into, using })` (or an array) |
