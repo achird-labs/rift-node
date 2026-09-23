@@ -188,6 +188,14 @@ export interface RecordedRequest {
   /** `'binary'` when the engine base64-encoded a non-UTF-8 body (engine ≥ 0.13.6); absent for text. */
   _mode?: 'binary';
   timestamp?: string;
+  /** How the request was answered (engine >= 0.18.0, rift#364): the status served and the latency
+   * in ms. Absent when not recorded — a request still in flight when the journal was read, one
+   * whose handling errored, or an older engine. `latencyMs: 0` is a real reading. */
+  status?: number;
+  latencyMs?: number;
+  /** The node that answered. Stamped only by a clustered journal; a single engine — including one
+   * the SDK spawns — never sets it. */
+  node?: string;
   [key: string]: unknown;
 }
 

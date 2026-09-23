@@ -7,6 +7,14 @@ All notable changes to `@rift-vs/rift` are documented here. This project adheres
 
 ### Added
 
+- **`RecordedRequest.status`, `.latencyMs` and `.node`** (issue #148). Since engine 0.18.0 a
+  journal entry records how it was answered (rift#364); the SDK already received the fields but
+  only through `raw` with a cast. They are lifted onto the typed shape and documented: `undefined`
+  means not recorded (a request still in flight when the journal was read, one whose handling
+  errored, or an engine < 0.18.0), and `latencyMs: 0` is a real reading. `node` is stamped only by
+  a clustered journal and is always `undefined` against a single engine. No version gate —
+  optional fields.
+
 - **`latency()`, `repeat()` and `binaryBody(string)` validate their arguments** (issue #146). Engine
   0.18.0 refuses at the config door what these builders used to pass through: a fractional or
   negative `wait` (rift#1162), a `{min, max}` range with `min > max` (rift#1148 — older engines
