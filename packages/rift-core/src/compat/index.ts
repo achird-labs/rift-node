@@ -18,6 +18,7 @@
 import { spawn as spawnProcess, ChildProcess } from 'child_process';
 import { EventEmitter } from 'events';
 import { findBinary } from '../binary.js';
+import { hostForUrl } from '../host.js';
 import { resolveBinary } from '../spawn/resolve.js';
 import { resolveApiKey } from '../spawn/spawn.js';
 import { assertInterceptAuthValid } from '../apikey.js';
@@ -140,7 +141,7 @@ function sleep(ms: number): Promise<void> {
  */
 export async function waitForServer(host: string, port: number, timeoutMs: number): Promise<void> {
   const startTime = Date.now();
-  const url = `http://${host}:${port}/`;
+  const url = `http://${hostForUrl(host)}:${port}/`;
   let lastError: unknown;
 
   while (Date.now() - startTime < timeoutMs) {

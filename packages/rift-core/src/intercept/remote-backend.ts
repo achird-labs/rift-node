@@ -12,6 +12,7 @@
  * `InterceptBackend` returns.
  */
 
+import { hostForUrl } from '../host.js';
 import type { RemoteClient } from '../remote/client.js';
 import type { InterceptBackend } from './types.js';
 
@@ -21,7 +22,7 @@ export class RemoteInterceptBackend implements InterceptBackend {
   async startIntercept(optionsJson: string): Promise<{ interceptPort: number; interceptUrl: string }> {
     const { host, port } = JSON.parse(optionsJson) as { host: string; port: number };
     await this.client.interceptListRules();
-    return { interceptPort: port, interceptUrl: `http://${host}:${port}` };
+    return { interceptPort: port, interceptUrl: `http://${hostForUrl(host)}:${port}` };
   }
 
   async addRules(rulesJson: string): Promise<void> {

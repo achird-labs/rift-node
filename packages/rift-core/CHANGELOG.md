@@ -75,6 +75,21 @@ All notable changes to `@rift-vs/rift` are documented here. This project adheres
 
 ### Fixed
 
+- **An IPv6 host no longer builds an invalid URL** (issue #143). Engine 0.18.0 accepts a bare IPv6
+  literal on every door (`--host ::1`, an imposter's `host`, the intercept listener — rift#1137),
+  but the SDK built its URLs by concatenation, so `spawn({ host: '::1' })` produced
+  `http://::1:<port>`, which `fetch` rejects as `Invalid URL`: the readiness poll retried until the
+  startup timeout and the child was killed, with nothing naming the cause. `connect('http://[::1]:2525')`
+  went wrong more quietly — the admin URL parsed, but every imposter handle's `.url` came out
+  bracket-less because `normalizeHost` strips them. The intercept handle URL had the same defect when
+  the caller passed a bare IPv6 `host`, as did the compat readiness poll.
+
+  Every URL built from a host now goes through one helper that brackets an IPv6 literal (and leaves
+  IPv4 and already-bracketed input alone). The any-interface `::` maps to `[::1]` in a handle URL,
+  as `0.0.0.0` maps to `127.0.0.1`. A zone id (`fe80::1%2`) is kept inside the brackets; note that
+  Node's WHATWG `URL` refuses a zoned host regardless, so such a bind is not dialable by `fetch`.
+  An IPv6 `--host` starts only on engine >= 0.18.0; older engines refuse it before the SDK is involved.
+
 - **`space(flowId).addStub()` sends the stub the caller built** (issue #142). `RemoteClient.addSpaceStub`
   wrapped the stub in the `{ stub }` envelope that belongs to `POST /imposters/{port}/stubs`; the
   space route takes the stub object bare. Engine 0.18.0 refuses the envelope with a 400 naming it,

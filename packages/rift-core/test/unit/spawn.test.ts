@@ -544,6 +544,30 @@ describe('spawn — MB_APIKEY env contract (issue #103)', () => {
       return { engine, args };
     }
 
+    it('binds and dials an IPv6 loopback host with a bracketed admin URL (issue #143)', async () => {
+      // The stub listens on ::1 so the readiness poll can only succeed through a URL whose host
+      // is bracketed — `http://::1:<port>` is not a URL at all and never reaches the socket.
+      const server = http.createServer((_req, res) => {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end('{"imposters":[]}');
+      });
+      // A runner without an IPv6 loopback must fail here, naming the bind, not hang to the timeout.
+      await new Promise<void>((resolve, reject) => {
+        server.once('error', reject);
+        server.listen(0, '::1', resolve);
+      });
+      const { port } = server.address() as AddressInfo;
+      try {
+        const { engine, args } = await spawnAgainstStub({ port }, { host: '::1', startupTimeoutMs: 2000 });
+        expect(engine.url).toBe(`http://[::1]:${port}`);
+        expect(args).toContain('--host');
+        expect(args[args.indexOf('--host') + 1]).toBe('::1');
+        await engine.close();
+      } finally {
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+      }
+    });
+
     it('sends an inherited MB_APIKEY as the client Authorization header', async () => {
       process.env.MB_APIKEY = 'ambient-secret';
       const admin = await stubAdmin();

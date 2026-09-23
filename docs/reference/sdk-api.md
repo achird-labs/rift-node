@@ -712,7 +712,10 @@ Spawn exposes the engine's CLI flags as first-class options:
 
 ```ts
 interface SpawnOptions {
-  port?: number; host?: string; loglevel?: 'debug'|'info'|'warn'|'error'; logfile?: string;
+  port?: number; host?: string;                   // --host: an IP literal (the engine refuses a hostname);
+                                                  // IPv6 (`::1`) needs engine >= 0.18.0 and is bracketed
+                                                  // in every URL the SDK builds from it
+  loglevel?: 'debug'|'info'|'warn'|'error'; logfile?: string;
   version?: string; binaryPath?: string; env?: Record<string, string>; mirror?: string;
   startupTimeoutMs?: number; shutdownTimeoutMs?: number;
   allowInjection?: boolean;                       // --allow-injection

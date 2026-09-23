@@ -20,6 +20,14 @@ describe('issue #25 — compat waitForServer (fetch-based poll)', () => {
     globalThis.fetch = realFetch;
   });
 
+  it('dials an IPv6 host with brackets (issue #143)', async () => {
+    const fetchMock = jest.fn().mockResolvedValue({ status: 200 } as Response);
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    await expect(waitForServer('::1', 12345, 5000)).resolves.toBeUndefined();
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('http://[::1]:12345/');
+  });
+
   it('AC2b: an error-status HTTP response counts as ready (resolves)', async () => {
     const fetchMock = jest.fn().mockResolvedValue({ status: 503 } as Response);
     globalThis.fetch = fetchMock as unknown as typeof fetch;
