@@ -26,11 +26,13 @@ export interface CreateOptions {
   port?: number;
   /** Bind address (default: localhost) */
   host?: string;
-  /** Log level: debug, info, warn, error */
-  loglevel?: 'debug' | 'info' | 'warn' | 'error';
+  /** Log level: trace, debug, info, warn (or warning), error — engine 0.18.0 aborts startup on any
+   * other value; a `RUST_LOG` in the environment supersedes it. */
+  loglevel?: 'trace' | 'debug' | 'info' | 'warn' | 'warning' | 'error';
   /** Path to log file */
   logfile?: string;
-  /** IP addresses allowed to connect (Mountebank compatibility) */
+  /** Accepted for Mountebank compatibility and NOT enforced by the engine (it only logs a WARN);
+   * use `localOnly` / `apiKey` or a network policy to restrict access. */
   ipWhitelist?: string[];
   /**
    * Directory for imposter persistence (Mountebank `--datadir` parity). Imposters created or

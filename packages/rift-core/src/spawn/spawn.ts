@@ -16,6 +16,7 @@ import {
   assertInterceptAuthOption,
   assertInterceptAuthValid,
   MIN_INTERCEPT_AUTH_ENGINE,
+  isBlank,
 } from '../apikey.js';
 import type { InterceptOptions } from '../intercept/types.js';
 import { hostForUrl } from '../host.js';
@@ -38,6 +39,26 @@ const HEALTH_CHECK_INTERVAL_MS = 100;
 /** The engine's CLI accepts `--no-parse` alone and silently does nothing with it (only its FFI door
  * refuses the combination), so the mistake would otherwise be invisible. Checked in `spawn()` ahead
  * of binary resolution as well as in `buildSpawnArgs`, like the admin-key guard. */
+/** The `--loglevel` values the engine accepts (`bootstrap.rs` `ACCEPTED_LEVELS`), lowercased. */
+export type LogLevel = 'trace' | 'debug' | 'info' | 'warn' | 'warning' | 'error';
+const LOG_LEVELS: ReadonlySet<string> = new Set(['trace', 'debug', 'info', 'warn', 'warning', 'error']);
+
+/**
+ * Engine 0.18.0 aborts startup on a `--loglevel` it does not know (rift#1134; earlier engines fell
+ * back to `info` silently), which the SDK would only surface as an opaque early exit after resolving
+ * — possibly downloading — a binary. The engine trims (Rust's `str::trim`, so U+0085 too) and
+ * lowercases, and treats a value that trims to empty as "not supplied", so the check does the same.
+ */
+function assertLogLevel(level: string | undefined): void {
+  if (level === undefined || isBlank(level)) return;
+  if (!LOG_LEVELS.has(level.trim().toLowerCase())) {
+    throw new InvalidDefinition(
+      `loglevel ${JSON.stringify(level)} is not a log level. Accepted: trace, debug, info, warn (or warning), error — ` +
+        'engine 0.18.0 aborts startup on anything else'
+    );
+  }
+}
+
 function assertNoParseHasConfigfile(opts: { noParse?: boolean; configfile?: string }): void {
   if (opts.noParse === true && opts.configfile === undefined) {
     throw new InvalidDefinition(
@@ -49,7 +70,7 @@ function assertNoParseHasConfigfile(opts: { noParse?: boolean; configfile?: stri
 /** The subset of {@link SpawnOptions} that shapes the engine's command line. */
 export interface SpawnArgsOptions {
   host?: string;
-  loglevel?: string;
+  loglevel?: LogLevel;
   allowInjection?: boolean;
   apiKey?: string;
   localOnly?: boolean;
@@ -70,6 +91,7 @@ export interface SpawnArgsOptions {
 /** Builds the Rift engine CLI args for a given admin port. */
 export function buildSpawnArgs(port: number, opts: SpawnArgsOptions = {}): string[] {
   assertApiKeyNotBlank(opts.apiKey);
+  assertLogLevel(opts.loglevel);
   const args = ['--port', String(port)];
   if (opts.host) {
     args.push('--host', opts.host);
@@ -195,7 +217,13 @@ export interface SpawnOptions {
    * hostname with "--host <value> is not an IP literal". An IPv6 literal (`::1`, `[::1]`) needs
    * engine >= 0.18.0; the SDK brackets it wherever it builds a URL. Default `127.0.0.1`. */
   host?: string;
-  loglevel?: string;
+  /** --loglevel: `trace` | `debug` | `info` | `warn` (or `warning`) | `error`, case-insensitive.
+   * Anything else throws {@link InvalidDefinition} before the binary is resolved — engine 0.18.0
+   * aborts startup on it (rift#1134), where earlier engines fell back to `info`. A `RUST_LOG` set in
+   * this process's environment is inherited by the child and **supersedes** `--loglevel` (which the
+   * engine still validates); a `RUST_LOG` the engine cannot parse aborts the spawn too, surfaced as
+   * the engine's stderr. */
+  loglevel?: LogLevel;
   /** Engine version to resolve when the binary isn't already local. */
   version?: string;
   /** Explicit binary path override; beats `env.RIFT_BINARY_PATH`. */
@@ -203,6 +231,10 @@ export interface SpawnOptions {
   env?: EnvRecord;
   mirror?: string;
   startupTimeoutMs?: number;
+  /** How long `close()` waits after `SIGTERM` before `SIGKILL` (default 5000 ms). Since engine
+   * 0.18.0 the process drains on `SIGTERM` — stops accepting, gives in-flight connections a grace of
+   * about three seconds at most, leaves the datadir alone, exits 0 (rift#1155) — so keep this above
+   * ~3 s or `close()` kills a shutdown that was about to finish cleanly. */
   shutdownTimeoutMs?: number;
   /** --allow-injection. Gates every scripting surface at the admin door: `inject()` responses,
    * `injectPredicate()` and `_rift.script` on every engine; `decorate()`, `shellTransform()` and a
@@ -223,13 +255,21 @@ export interface SpawnOptions {
   apiKey?: string;
   /** --local-only */
   localOnly?: boolean;
-  /** --ip-whitelist a,b,... */
+  /** --ip-whitelist a,b,... — accepted for Mountebank compatibility and **not enforced**: the engine
+   * applies no IP filtering and only logs a WARN saying so (rift#879), which a spawned engine's
+   * stderr never shows you. Restrict access with `localOnly`, `apiKey` (and the engine's
+   * `--require-admin-auth`), or a network policy instead. */
   ipWhitelist?: string[];
   /** --origin */
   origin?: string;
-  /** --datadir */
+  /** --datadir: imposters created or changed through the admin API are persisted as `<port>.json`
+   * here and reloaded on the next start. Since engine 0.18.0 a file must be named after the port it
+   * declares and declare one (rift#1128, #1125) — a misnamed or port-less file is skipped at startup
+   * (named in the skip summary) and refuses `POST /admin/reload` with a 500, and is never modified.
+   * Imposters loaded from `configfile`, and runtime edits to them, are not written here (rift#1122). */
   datadir?: string;
-  /** --configfile */
+  /** --configfile: loaded at startup and re-read by `POST /admin/reload`; never persisted to
+   * `datadir`, so a runtime edit to one of its imposters lives only until the next reload. */
   configfile?: string;
   /** --no-parse: load `configfile` verbatim, skipping EJS preprocessing (and the preprocessing of
    * the `POST /admin/reload` that re-reads it). Since engine 0.18.0 a tag the loader does not
@@ -350,6 +390,7 @@ export async function spawn(opts: SpawnOptions = {}, deps: SpawnDeps = defaultSp
   // download to discover, and the engine would only report it as an opaque child-process exit.
   const apiKey = resolveApiKey(opts.apiKey);
   assertNoParseHasConfigfile(opts);
+  assertLogLevel(opts.loglevel);
   // Shape and the caPem refusal up front too: a malformed option, or one this transport cannot
   // carry, should be named as such — not reported as a version problem after a download.
   if (opts.upstreamTrust !== undefined) upstreamTrustSpawnArgs(opts.upstreamTrust);

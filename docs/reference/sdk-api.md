@@ -488,7 +488,10 @@ interface CopySpec {
 interface LookupSpec {
   key: { from: CopySpec['from']; using: CopySpec['using'] };
   fromDataSource: { csv: { path: string; keyColumn: string; delimiter?: string } };
-  into: string;
+  into: string;      // "${ROW}"; the response text reads "${ROW}[column]". Engine >= 0.18.0 never
+                     // re-scans substituted text (rift#1203): a "${ROW}[secret]" the CLIENT sent —
+                     // via copy, a template or a header — is served literally where Mountebank
+                     // 2.9.1 expanded it. "${ROW}[${COL}]" with a copy into ${COL} still works.
 }
 ```
 
@@ -871,7 +874,10 @@ interface SpawnOptions {
   port?: number; host?: string;                   // --host: an IP literal (the engine refuses a hostname);
                                                   // IPv6 (`::1`) needs engine >= 0.18.0 and is bracketed
                                                   // in every URL the SDK builds from it
-  loglevel?: 'debug'|'info'|'warn'|'error'; logfile?: string;
+  loglevel?: 'trace'|'debug'|'info'|'warn'|'warning'|'error'; logfile?: string;
+                                                  // case-insensitive; anything else throws InvalidDefinition
+                                                  // before the binary is resolved (engine >= 0.18.0 aborts on
+                                                  // it). An inherited RUST_LOG supersedes --loglevel
   version?: string; binaryPath?: string; env?: Record<string, string>; mirror?: string;
   startupTimeoutMs?: number; shutdownTimeoutMs?: number;
   allowInjection?: boolean;                       // --allow-injection
@@ -880,8 +886,12 @@ interface SpawnOptions {
                                                   // is resolved — omit to run without admin auth
                                                   // "blank" = whitespace under JS trim() OR Rust
                                                   // str::trim (the engine's), so U+0085 counts
-  localOnly?: boolean; ipWhitelist?: string[]; origin?: string;
-  datadir?: string; configfile?: string;
+  localOnly?: boolean; origin?: string;
+  ipWhitelist?: string[];                         // accepted, NOT enforced (engine logs a WARN only):
+                                                  // restrict with localOnly / apiKey / a network policy
+  datadir?: string; configfile?: string;          // datadir files are <port>.json declaring that port
+                                                  // (else skipped at start, reload 500s); configfile
+                                                  // imposters and edits to them are never written there
   noParse?: boolean;                               // --no-parse: load configfile verbatim, no EJS
                                                   // (needs configfile; engine >= 0.18.0 fails the
                                                   // spawn on an unevaluated tag, this is the way through)
@@ -936,7 +946,10 @@ ambient value requires `intercept` to be requested: `rift.spawn()` without it, a
 (which never starts a listener), reject it. Unset the variable, or ask for a listener.
 
 `SpawnedEngine.close()` also closes its `AdminApi` client, so no usable client outlives a dead
-process.
+process. Since engine 0.18.0 the process drains on the `SIGTERM` that `close()` sends — it stops
+accepting, gives in-flight connections a bounded grace of about three seconds at most, leaves the
+datadir alone and exits 0 (rift#1155) — so `shutdownTimeoutMs` (default 5000) must stay above ~3 s,
+or `close()` escalates to `SIGKILL` a shutdown that was about to finish cleanly.
 
 ### 8.2 Embedded
 
