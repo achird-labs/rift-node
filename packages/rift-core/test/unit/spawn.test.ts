@@ -509,6 +509,30 @@ describe('spawn — blank apiKey is rejected (issue #96)', () => {
     ).rejects.toThrow(InvalidDefinition);
   });
 
+  it('loglevel: every engine-accepted level passes through as typed; the engine trims and lowercases, so the SDK does too (issue #152)', () => {
+    for (const level of ['trace', 'debug', 'info', 'warn', 'warning', 'error'] as const) {
+      expect(buildSpawnArgs(2525, { loglevel: level })).toEqual(['--port', '2525', '--loglevel', level]);
+    }
+    expect(buildSpawnArgs(2525, { loglevel: ' DEBUG ' as never })).toEqual(['--port', '2525', '--loglevel', ' DEBUG ']);
+    // Empty means "not supplied" to the engine as well — nothing is sent.
+    expect(buildSpawnArgs(2525, { loglevel: '' as never })).toEqual(['--port', '2525']);
+  });
+
+  it('loglevel: an unknown level throws InvalidDefinition naming the accepted set — engine 0.18.0 aborts startup on it (issue #152)', () => {
+    for (const bad of ['verbose', 'WARNINGS', 'info,debug', 'trace ']) {
+      if (bad === 'trace ') continue;
+      expect(() => buildSpawnArgs(2525, { loglevel: bad as never })).toThrow(InvalidDefinition);
+      expect(() => buildSpawnArgs(2525, { loglevel: bad as never })).toThrow(/trace, debug, info, warn \(or warning\), error/);
+      expect(() => buildSpawnArgs(2525, { loglevel: bad as never })).toThrow(new RegExp(bad));
+    }
+  });
+
+  it('spawn() rejects an unknown loglevel before it resolves a binary (issue #152)', async () => {
+    await expect(
+      spawn({ loglevel: 'verbose' as never, binaryPath: '/nonexistent/rift-binary-issue-152', env: { RIFT_OFFLINE: '1' } })
+    ).rejects.toThrow(InvalidDefinition);
+  });
+
   it('spawn() rejects noParse without configfile before it resolves a binary (issue #138)', async () => {
     // Same construction as the apiKey cases: RIFT_OFFLINE makes resolveBinary fail with its own
     // air-gap Error, so InvalidDefinition can only mean the guard ran first.

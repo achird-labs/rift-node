@@ -99,7 +99,7 @@ raw `wire.Predicate` as an escape hatch.
 | `_behaviors: { decorate: 'function(req,res){...}' }` | `.decorate('function(req,res){...}')` |
 | `_behaviors: { shellTransform: ['cmd1', 'cmd2'] }` | `.shellTransform('cmd1', 'cmd2')` |
 | `_behaviors: { copy: [{ from, into, using }] }` | `.copy({ from, into, using })` (or an array) |
-| `_behaviors: { lookup: [{ key, fromDataSource, into }] }` | `.lookup({ key, fromDataSource, into })` (or an array) |
+| `_behaviors: { lookup: [{ key, fromDataSource, into }] }` | `.lookup({ key, fromDataSource, into })` (or an array). **Divergence** (engine ≥ 0.18.0, rift#1203): substituted text is never re-scanned, so a `${ROW}[secret]` that arrives in the request — through a `copy`, a template or a header — is served literally, where Mountebank 2.9.1 expanded it into the CSV column. `${ROW}[${COL}]` with a `copy` into `${COL}` still lets the author hand the column choice to the client |
 | Any other `_behaviors` key | `.behavior({ ...raw })` — shallow-merge escape hatch |
 
 Execution order in-engine (Rift ≥ 0.18.0, matching Mountebank): `wait` → `lookup` → `copy` →
@@ -225,7 +225,14 @@ You never have to fight the typed layer:
 
 `datadir` has **full parity**: imposters created or mutated through the admin API are persisted as
 `{port}.json` under the directory and reloaded when a server starts against the same `datadir`, so
-imposter state survives a restart.
+imposter state survives a restart. Since engine 0.18.0 the directory is stricter about what it
+holds (rift#1128, #1125, #1122): a file must be named `<port>.json` after the port it declares and
+must declare one — a misnamed or port-less file (a copied-in export, a hand-written definition) is
+skipped at startup and named in the skip summary, refuses `POST /admin/reload` with a 500, and is
+never modified; and imposters loaded from `configfile` — together with any runtime edit to them
+through the stub endpoints or a `PUT /imposters` — are **not** written to `datadir`. Running both
+flags on an earlier engine left a `<port>.json` copy of every config-file imposter in the directory;
+delete those copies, or each reload refuses on the duplicate port.
 
 `mb --configfile` maps to `rift.spawn({ configfile })`, and Mountebank's `--noParse` to
 `rift.spawn({ configfile, noParse: true })` (`--no-parse`): the file is loaded verbatim, with no

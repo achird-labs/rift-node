@@ -164,6 +164,18 @@ All notable changes to `@rift-vs/rift` are documented here. This project adheres
   syntax-checks an `inject` body (rift#1183). The builder doc comments, the reference and the
   migration guide now say all of this; `ScriptEngineConfig.defaultEngine` accepts the engine's
   `'js'` spelling and its docs say it only reaches a script that names no engine (rift#1159).
+- **`SpawnOptions.loglevel` is typed as the engine's accepted set and refused before the binary is
+  resolved** (issue #152): `'trace' | 'debug' | 'info' | 'warn' | 'warning' | 'error'` (the compat
+  `RiftOptions.loglevel` gains `trace` and `warning`). Engine 0.18.0 aborts startup on any other
+  value (rift#1134) where earlier engines fell back to `info`, and a spawn would only have shown
+  that as an opaque early exit — now `InvalidDefinition` names the accepted set at the call. A
+  `RUST_LOG` inherited from the environment supersedes `--loglevel`, and one the engine cannot
+  parse aborts the spawn; the option docs say so. Docs for the other 0.18.0 option facts: `ipWhitelist`
+  is accepted and **not enforced** (rift#879 — use `localOnly` / `apiKey` / a network policy); a
+  `datadir` file must be `<port>.json` declaring that port and `configfile` imposters are never
+  written there (rift#1128, #1125, #1122); `close()`'s `SIGTERM` now drains for up to ~3 s
+  (rift#1155), so `shutdownTimeoutMs` must stay above that; and `copy`/`lookup` substituted text is
+  never re-scanned for tokens, a divergence from Mountebank 2.9.1 (rift#1203).
 
 - **Docs: the object-form `_behaviors` execution order is Mountebank's since engine 0.18.0** —
   wait → lookup → copy → shellTransform → decorate (rift#1202; issue #140). The guides said

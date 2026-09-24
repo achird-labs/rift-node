@@ -20,4 +20,4 @@ export {
 export type { PlatformTarget, DownloadUrlOptions, ResolveBinaryOptions, EnvRecord, Libc } from './resolve.js';
 
 export { buildSpawnArgs, resolveApiKey, spawn } from './spawn.js';
-export type { SpawnedEngine, SpawnOptions, SpawnArgsOptions, SpawnDeps } from './spawn.js';
+export type { SpawnedEngine, SpawnOptions, SpawnArgsOptions, SpawnDeps, LogLevel } from './spawn.js';
