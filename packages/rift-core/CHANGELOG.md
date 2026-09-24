@@ -7,6 +7,15 @@ All notable changes to `@rift-vs/rift` are documented here. This project adheres
 
 ### Added
 
+- **`interceptDispatcher(handle, { allowH2 })`** (issue #151): passes undici's `allowH2` through
+  so an in-process `fetch` negotiates HTTP/2 with the intercept tunnel, which offers `h2, http/1.1`
+  since engine 0.18.0 (rift#996); omitted, undici's HTTP/1.1 default applies and the config is
+  byte-identical to before. The reference gains a "Tunnel semantics" section for what the tunnel
+  does with traffic no rule claims since 0.18.0: WebSocket handshakes relayed and pumped, frames
+  never recorded (rift#997); h2 with 32 streams per tunnel and `RIFT_DISABLE_HTTP2=1` (rift#996);
+  keep-alive `CONNECT` tunnels (rift#993); chunked request bodies matched and a 1 MiB body cap
+  answered with 413 rather than a silent truncation (rift#991).
+
 - **Declarative flow-state writes: `setState()`, `incrementState()`, `deleteState()`,
   `clearFlowState()` and `stateOps(...)` on every response builder** (issue #149). Engine 0.18.0
   runs `_rift.stateOps` after an `is` response is rendered, in order, against the request's flow

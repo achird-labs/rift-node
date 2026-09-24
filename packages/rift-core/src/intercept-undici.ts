@@ -15,9 +15,15 @@ export interface ProxyAgentConfig {
   uri: string;
   requestTls: { ca: string };
   proxyTls: Record<string, never>;
+  /** undici's `allowH2` — present only when the caller set it. */
+  allowH2?: boolean;
 }
 
 export interface InterceptDispatcherOptions {
+  /** Passed through as undici's `allowH2`. The intercept tunnel negotiates HTTP/2 since engine
+   * 0.18.0 (ALPN `h2, http/1.1`, rift#996), but undici defaults to HTTP/1.1, so an in-process
+   * `fetch` through the dispatcher stays on h1 unless this is `true`. Omitted → undici's default. */
+  allowH2?: boolean;
   /** Overrides the default `new undici.ProxyAgent(config)` construction. Lets callers (and this
    * module's own unit tests, run where undici is NOT installed) assert the resolved config shape
    * without ever importing undici. */
@@ -47,8 +53,8 @@ async function loadProxyAgent(): Promise<new (config: ProxyAgentConfig) => unkno
 
 /**
  * Resolves to `new ProxyAgent({ uri: handle.url, requestTls: { ca: await handle.caPem() }, proxyTls:
- * {} })` — pass it as `{ dispatcher }` to `fetch`/undici's `request` so the call is transparently
- * routed through the intercept with no TLS errors.
+ * {} })` — plus `allowH2` when given — pass it as `{ dispatcher }` to `fetch`/undici's `request` so
+ * the call is transparently routed through the intercept with no TLS errors.
  */
 export async function interceptDispatcher(
   handle: InterceptHandle,
@@ -59,6 +65,7 @@ export async function interceptDispatcher(
     requestTls: { ca: await handle.caPem() },
     proxyTls: {},
   };
+  if (opts.allowH2 !== undefined) config.allowH2 = opts.allowH2;
   if (opts.proxyAgentFactory !== undefined) {
     return opts.proxyAgentFactory(config);
   }

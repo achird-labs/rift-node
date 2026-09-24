@@ -791,6 +791,36 @@ hop-by-hop but are **not** stripped, so
 `serve()` sends them and the SUT receives them. The engine manages `Content-Length` and the
 `Connection` header itself on every served response (tunnels are keep-alive since 0.18.0).
 
+### Tunnel semantics (engine ≥ 0.18.0)
+
+What the tunnel does with traffic no rule claims is the engine's contract, not the SDK's; nothing
+here changes an SDK call, but a system under test behaves differently through the tunnel than it
+did on ≤ 0.17.0:
+
+- **WebSocket** (rift#997): an `Upgrade: websocket` handshake no rule matches is relayed to the
+  origin and the upgraded connection is pumped both ways until either side closes. A rule that
+  *does* match the handshake serves its response and no upgrade happens — `serve()` on it is how you
+  simulate the endpoint refusing. Frames are never inspected, matched or recorded (WebSocket
+  *mocking* is out of scope). Only `websocket` takes this path; `h2c` and any other `Upgrade` value
+  are unchanged. The origin leg uses the process-wide outbound trust (`upstreamTrust`, §5.6).
+- **HTTP/2** (rift#996): ALPN offers `h2, http/1.1` and the tunnel serves whichever is negotiated
+  (≤ 0.17.0 pinned `http/1.1`, silently downgrading an h2 client). A tunnel serves at most 32
+  concurrent h2 streams, so the body cap below stays a per-tunnel bound of 32 MiB. A rule
+  predicating on the `host` header fires over h2 as well. `RIFT_DISABLE_HTTP2=1` in the engine's
+  environment forces HTTP/1.1; prior-knowledge h2c through the tunnel is not supported. undici
+  defaults to HTTP/1.1, so an in-process `fetch` through `interceptDispatcher` stays on h1 unless you
+  pass `{ allowH2: true }`.
+- **Keep-alive** (rift#993): a `CONNECT` tunnel carries many requests (≤ 0.17.0 set
+  `connection: close` on every response, defeating the SUT's connection pool). The `405` for a
+  non-`CONNECT` request and the `407` for failed proxy auth are answered before a tunnel exists and
+  still close.
+- **Request bodies** (rift#991): the TLS-terminated tunnel is served by hyper, so a chunked request
+  body reaches rule matching and forwarding (it used to count as bodyless). A body over **1 MiB** is
+  refused with `413 Payload Too Large` and is neither matched nor forwarded (it used to be truncated
+  at the cap and forwarded as if complete); a body exactly at the cap is served. Request header
+  values that are not UTF-8 are skipped rather than matched as U+FFFD text; response header values
+  relay verbatim.
+
 Per-transport availability (documented, typed):
 - **embedded** — `engine.intercept(opts)` calls `rift_start_intercept` (idempotent handle reuse).
 - **spawn** — must be requested at spawn: `rift.spawn({ intercept: true | InterceptOptions })`
@@ -806,7 +836,9 @@ Per-transport availability (documented, typed):
 
 Trust helpers: `handle.env()` covers child-process SUTs; for in-process undici/fetch, the optional
 subpath `@rift-vs/rift/intercept-undici` (peer-dep `undici`) exports
-`interceptDispatcher(handle): Promise<ProxyAgent>` wired with proxy URL + CA.
+`interceptDispatcher(handle, { allowH2? }): Promise<ProxyAgent>` wired with proxy URL + CA;
+`allowH2: true` passes undici's option through so the in-process client negotiates h2 with the
+tunnel (engine ≥ 0.18.0), otherwise undici's HTTP/1.1 default applies.
 
 ## 8. Transports
 
