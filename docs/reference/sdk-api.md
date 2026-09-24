@@ -455,7 +455,9 @@ interface ResponseBuilder /* R */ {
   deleteState(key: string): this;
   clearFlowState(): this;
 
-  // behaviors (_behaviors) — execution order in-engine: copy → lookup → decorate → wait
+  // behaviors (_behaviors) — execution order in-engine (>= 0.18.0, Mountebank's): wait → lookup → copy →
+  // shellTransform → decorate (<= 0.17.0: wait → copy → lookup → decorate → shellTransform). For another
+  // order send the `behaviors` array form alone via raw() — the engine ignores it next to _behaviors.
   latency(ms: number | { min: number; max: number } | string): this;
       // number → wait: N; range → wait: {min,max}; string = JS fn source → wait: "function() {...}"
       // number: non-negative integer; range: 0 <= min <= max — anything else throws InvalidDefinition
