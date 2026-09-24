@@ -173,6 +173,13 @@ ok().lookup({ key: { from: 'path', using: {...} }, fromDataSource: { csv: { path
 ok().behavior({ /* raw _behaviors escape hatch */ })
 ```
 
+Where they run is a per-shape rule (engine ≥ 0.18.0; ≤ 0.17.0 ran them on `is` only): on an `is`
+response, on the result of a `proxy` (before it is recorded) or an `inject` function, and on a
+`fault(...)` or `script(...)` response only `repeat` — the rest is reported in `_rift.warnings`.
+`decorate()`, `shellTransform()` and a function-string `latency()` are scripting surfaces: the
+engine answers 400 `invalid injection` unless the spawn sets `allowInjection: true` (a remote
+engine `--allow-injection`); imposters created over the embedded FFI are not gated.
+
 Execution order in-engine (Rift ≥ 0.18.0, Mountebank's order): **wait → lookup → copy →
 shellTransform → decorate**; Rift ≤ 0.17.0 ran wait → copy → lookup → decorate → shellTransform
 (see [Migrating from Mountebank §Behavior changes in Rift 0.18.0](../mountebank/migration.md#behavior-changes-in-rift-0180)).
@@ -202,6 +209,8 @@ import { proxyTo } from '@rift-vs/rift';
 
 proxyTo('http://upstream').proxyOnce()           // record once, replay thereafter
   .generatePredicates({ matches: { path: true, method: true } })
+proxyTo('http://upstream').latency(500)          // engine >= 0.18.0 runs behaviors on the upstream's
+                                                 // response before recording it; <= 0.17.0 ignored them
 ```
 
 Both have a much larger surface (all four native TCP fault kinds, `proxyAlways`/
