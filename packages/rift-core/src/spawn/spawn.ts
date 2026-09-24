@@ -204,11 +204,11 @@ export interface SpawnOptions {
   mirror?: string;
   startupTimeoutMs?: number;
   shutdownTimeoutMs?: number;
-  /** --allow-injection. Gates every scripting surface at the admin door: `inject()` responses and
-   * `injectPredicate()`, `decorate()`, `shellTransform()`, a function-string `latency()`, and
-   * `_rift.script` — since 0.18.0 on proxy, inject, fault and `_rift`-only responses too
-   * (rift#1181). Without it the engine answers 400 `invalid injection`. The embedded FFI is not
-   * gated. */
+  /** --allow-injection. Gates every scripting surface at the admin door: `inject()` responses,
+   * `injectPredicate()` and `_rift.script` on every engine; `decorate()`, `shellTransform()` and a
+   * function-string `latency()` on an `is` response on every engine and, since 0.18.0, on proxy,
+   * inject, fault and `_rift`-only responses too (rift#1181). Without it the engine answers 400
+   * `invalid injection`. The embedded FFI is not gated. */
   allowInjection?: boolean;
   /** --api-key (also used by the client for the Authorization header). A blank (empty or
    * whitespace-only) value throws {@link InvalidDefinition} before the binary is resolved — omit it

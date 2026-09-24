@@ -502,17 +502,22 @@ export function fault(kind: TcpFaultKind | (string & NonNullable<unknown>)): Res
 }
 
 /**
- * An `inject` response running the given script body. Scripting surface: needs `allowInjection: true` on spawn (`--allow-injection` on a remote engine) or the engine answers 400 `invalid injection` — since 0.18.0 on a proxy, inject, fault or `_rift`-only response too (rift#1181); imposters created over the embedded FFI are not gated.
- * Since 0.18.0 creating the imposter only syntax-checks the body (rift#1183): a body that is not a
+ * An `inject` response running the given script body. Scripting surface on every engine: needs
+ * `allowInjection: true` on spawn (`--allow-injection` on a remote engine) or the engine answers 400
+ * `invalid injection`; since 0.18.0 a scripted `_behaviors` block beside it is gated too (rift#1181),
+ * and the block runs on what the function returned (rift#1188). Imposters created over the embedded
+ * FFI are not gated. Since 0.18.0 creating the imposter only syntax-checks the body (rift#1183): a body that is not a
  * function fails on the first request, not at `create()`.
  */
 export function inject(fn: string): ResponseBuilder {
   return ResponseBuilder.injected(fn);
 }
 
-/** A response wrapping a {@link ScriptSpec} into `_rift.script`, with no `is` block. Scripting surface: needs `allowInjection: true` on spawn (`--allow-injection` on a remote engine) or the engine answers 400 `invalid injection` — since 0.18.0 on a proxy, inject, fault or `_rift`-only response too (rift#1181); imposters created over the embedded FFI are not gated.
- * A `_behaviors` block beside it applies only `repeat` (engine >= 0.18.0; the rest is reported in
- * `_rift.warnings`). */
+/** A response wrapping a {@link ScriptSpec} into `_rift.script`, with no `is` block. Scripting
+ * surface on every engine: needs `allowInjection: true` on spawn (`--allow-injection` on a remote
+ * engine) or the engine answers 400 `invalid injection`; since 0.18.0 a scripted `_behaviors` block
+ * beside it is gated too (rift#1181), and such a block applies only `repeat` — the rest is reported
+ * in `_rift.warnings`. Imposters created over the embedded FFI are not gated. */
 export function script(spec: ScriptSpec): ResponseBuilder {
   return new ResponseBuilder().script(spec);
 }
