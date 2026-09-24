@@ -514,8 +514,12 @@ describe('spawn — blank apiKey is rejected (issue #96)', () => {
       expect(buildSpawnArgs(2525, { loglevel: level })).toEqual(['--port', '2525', '--loglevel', level]);
     }
     expect(buildSpawnArgs(2525, { loglevel: ' DEBUG ' as never })).toEqual(['--port', '2525', '--loglevel', ' DEBUG ']);
-    // Empty means "not supplied" to the engine as well — nothing is sent.
+    // Empty means "not supplied" to the engine as well — nothing is sent; a value that trims to
+    // empty (Rust's trim, so U+0085 too) is accepted by the engine as "info", so it must pass here
+    // and is forwarded as-is for the engine to treat the same way.
     expect(buildSpawnArgs(2525, { loglevel: '' as never })).toEqual(['--port', '2525']);
+    expect(buildSpawnArgs(2525, { loglevel: '   ' as never })).toEqual(['--port', '2525', '--loglevel', '   ']);
+    expect(buildSpawnArgs(2525, { loglevel: '\u0085' as never })).toEqual(['--port', '2525', '--loglevel', '\u0085']);
   });
 
   it('loglevel: an unknown level throws InvalidDefinition naming the accepted set — engine 0.18.0 aborts startup on it (issue #152)', () => {

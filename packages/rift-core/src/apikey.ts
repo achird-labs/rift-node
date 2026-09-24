@@ -52,7 +52,7 @@ const NEL = '\u0085';
  * refused here though neither dialect alone calls it blank. That and the U+FEFF-only case are the
  * only over-rejections, and both cost a respelling rather than an open admin plane.
  */
-function isBlank(value: string): boolean {
+export function isBlank(value: string): boolean {
   return value.replaceAll(NEL, '').trim() === '';
 }
 

@@ -16,6 +16,7 @@ import {
   assertInterceptAuthOption,
   assertInterceptAuthValid,
   MIN_INTERCEPT_AUTH_ENGINE,
+  isBlank,
 } from '../apikey.js';
 import type { InterceptOptions } from '../intercept/types.js';
 import { hostForUrl } from '../host.js';
@@ -45,11 +46,11 @@ const LOG_LEVELS: ReadonlySet<string> = new Set(['trace', 'debug', 'info', 'warn
 /**
  * Engine 0.18.0 aborts startup on a `--loglevel` it does not know (rift#1134; earlier engines fell
  * back to `info` silently), which the SDK would only surface as an opaque early exit after resolving
- * — possibly downloading — a binary. The engine trims and lowercases, and treats an empty value as
- * "not supplied", so the check does the same.
+ * — possibly downloading — a binary. The engine trims (Rust's `str::trim`, so U+0085 too) and
+ * lowercases, and treats a value that trims to empty as "not supplied", so the check does the same.
  */
 function assertLogLevel(level: string | undefined): void {
-  if (level === undefined || level === '') return;
+  if (level === undefined || isBlank(level)) return;
   if (!LOG_LEVELS.has(level.trim().toLowerCase())) {
     throw new InvalidDefinition(
       `loglevel ${JSON.stringify(level)} is not a log level. Accepted: trace, debug, info, warn (or warning), error — ` +
