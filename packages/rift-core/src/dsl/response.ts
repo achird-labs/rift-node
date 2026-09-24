@@ -7,6 +7,18 @@
  * are mutually exclusive "primary content" — set by construction (`ok()`, `proxyTo()`,
  * `inject()`, `fault()`) — but `_behaviors` and `_rift` accumulate on top of any of them, so a
  * proxy or inject response can still carry latency, repeat, a fault, etc.
+ *
+ * What the engine does with a `_behaviors` block depends on the shape (engine >= 0.18.0; before,
+ * every shape but `is` accepted the block and ignored it):
+ * - `is`: the block runs on the response.
+ * - `proxy` (rift#1189) and `inject` (rift#1188): the block runs on what the upstream or the
+ *   function returned — for a proxy, before the response is recorded, so the generated stub holds
+ *   the transformed result and a `proxyOnce` replay is not transformed again; a `wait` there is not
+ *   counted in the latency `addWaitBehavior` records; if a behavior fails nothing is recorded.
+ * - a native `fault` or a `_rift.script`-only response: only `repeat` takes effect; the rest is
+ *   reported in the imposter's `_rift.warnings` (`config_key_ignored`).
+ * A scripted block (`decorate`, `shellTransform`, a function-string `wait`) needs `allowInjection`
+ * on every shape — see each method.
  */
 
 import type {
@@ -144,7 +156,8 @@ export class ResponseBuilder {
   /** Sets `_behaviors.wait` — a fixed delay (ms), a `{min,max}` random range, or a bare fn-string.
    * A number must be a non-negative integer and a range must satisfy `0 <= min <= max`: the engine
    * refuses anything else at the config door (since 0.18.0; older engines dropped the block or, for
-   * an inverted range, dropped every connection). The fn-string form is not inspected. */
+   * an inverted range, dropped every connection). The fn-string form is not inspected, and it is a
+   * Scripting surface: needs `allowInjection: true` on spawn (`--allow-injection` on a remote engine) or the engine answers 400 `invalid injection` — since 0.18.0 on a proxy, inject, fault or `_rift`-only response too (rift#1181); imposters created over the embedded FFI are not gated. */
   latency(ms: number | { min: number; max: number } | string): this {
     if (typeof ms === 'number' && !isNonNegativeInteger(ms)) {
       throw new InvalidDefinition(`latency(ms) must be a non-negative integer of milliseconds, got ${String(ms)}`);
@@ -174,13 +187,14 @@ export class ResponseBuilder {
     return this;
   }
 
-  /** Sets `_behaviors.decorate` to a JS decorator function body. */
+  /** Sets `_behaviors.decorate` to a JS decorator function body. Scripting surface: needs `allowInjection: true` on spawn (`--allow-injection` on a remote engine) or the engine answers 400 `invalid injection` — since 0.18.0 on a proxy, inject, fault or `_rift`-only response too (rift#1181); imposters created over the embedded FFI are not gated. */
   decorate(jsFn: string): this {
     this.behaviors = { ...this.behaviors, decorate: jsFn };
     return this;
   }
 
-  /** Sets `_behaviors.shellTransform` — a single command (string) or several (array). No-op if none. */
+  /** Sets `_behaviors.shellTransform` — a single command (string) or several (array). No-op if none.
+   * Scripting surface: needs `allowInjection: true` on spawn (`--allow-injection` on a remote engine) or the engine answers 400 `invalid injection` — since 0.18.0 on a proxy, inject, fault or `_rift`-only response too (rift#1181); imposters created over the embedded FFI are not gated. */
   shellTransform(...cmds: string[]): this {
     if (cmds.length === 0) return this;
     const [only] = cmds;
@@ -487,12 +501,18 @@ export function fault(kind: TcpFaultKind | (string & NonNullable<unknown>)): Res
   return new ResponseBuilder().fault(kind);
 }
 
-/** An `inject` response running the given script body. */
+/**
+ * An `inject` response running the given script body. Scripting surface: needs `allowInjection: true` on spawn (`--allow-injection` on a remote engine) or the engine answers 400 `invalid injection` — since 0.18.0 on a proxy, inject, fault or `_rift`-only response too (rift#1181); imposters created over the embedded FFI are not gated.
+ * Since 0.18.0 creating the imposter only syntax-checks the body (rift#1183): a body that is not a
+ * function fails on the first request, not at `create()`.
+ */
 export function inject(fn: string): ResponseBuilder {
   return ResponseBuilder.injected(fn);
 }
 
-/** A response wrapping a {@link ScriptSpec} into `_rift.script`, with no `is` block. */
+/** A response wrapping a {@link ScriptSpec} into `_rift.script`, with no `is` block. Scripting surface: needs `allowInjection: true` on spawn (`--allow-injection` on a remote engine) or the engine answers 400 `invalid injection` — since 0.18.0 on a proxy, inject, fault or `_rift`-only response too (rift#1181); imposters created over the embedded FFI are not gated.
+ * A `_behaviors` block beside it applies only `repeat` (engine >= 0.18.0; the rest is reported in
+ * `_rift.warnings`). */
 export function script(spec: ScriptSpec): ResponseBuilder {
   return new ResponseBuilder().script(spec);
 }

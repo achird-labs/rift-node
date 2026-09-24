@@ -529,7 +529,8 @@ interface ProxyBuilder {
   rewritePath(from: string, to: string): this;                        // wire: pathRewrite (Rift ext)
   /** @deprecated */ clientCert(pem: { key: string; cert: string }): this; // no effect: Rift's proxy sends no
                                                                       // client certificate; dropped on parse
-  latency(...) / repeat(...) / decorate(...) etc.                     // _behaviors now legal on proxy
+  latency(...) / repeat(...) / decorate(...) etc.                     // _behaviors on a proxy: engine >= 0.18.0 runs
+                                                                      // them on the upstream response (<= 0.17.0 ignored)
   raw(patch: Partial<wire.StubResponse>): this;
   build(): wire.StubResponse;
 }
@@ -540,7 +541,13 @@ interface PredicateGenerator {
 ```
 
 `ProxyBuilder` extends `ResponseBuilder`, so behavior chainers stay legal on a proxy response and
-are emitted — the pre-M7 silent drop of `proxyTo(...).latency(500)` is gone (#23).
+are emitted — the pre-M7 silent drop of `proxyTo(...).latency(500)` is gone (#23). What the engine
+does with them is a version fact: **≥ 0.18.0 runs the block on the upstream's response before
+recording it** (rift#1189) — the generated stub holds the transformed result, a `proxyOnce` replay
+is not transformed again, a `wait` is not counted in `addWaitBehavior`'s latency, and a failing
+behavior records nothing; ≤ 0.17.0 accepted the block and ignored it. `decorate`, `shellTransform`
+and a function-string `latency` are scripting surfaces and need `allowInjection` on a proxy response
+too (rift#1181).
 
 #### Recording an origin behind a private CA (`upstreamTrust`)
 

@@ -25,7 +25,11 @@ export interface FlowStateConfig {
 }
 
 export interface ScriptEngineConfig {
-  defaultEngine?: 'rhai' | 'javascript';
+  /** The engine for a script that names none (engine >= 0.18.0 honours it, rift#1159; `'js'` is
+   * the engine's short spelling). Resolution: the script's own `engine`, else its `file`
+   * extension, else this, else `rhai`. Every `Script.*` constructor names an engine, so this only
+   * reaches a bare `{ code }` script sent through `raw()` / `fromJson`. */
+  defaultEngine?: 'rhai' | 'javascript' | 'js';
   timeoutMs?: number;
 }
 
