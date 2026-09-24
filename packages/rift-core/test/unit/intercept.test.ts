@@ -1293,6 +1293,24 @@ describe('issue #11 — interceptDispatcher (injected proxyAgentFactory; undici 
     expect(seen).toEqual({ uri: handle.url, requestTls: { ca: fake.caPemResult }, proxyTls: {} });
   });
 
+  it('allowH2: true reaches the ProxyAgent config; absent, the key is not emitted (issue #151)', async () => {
+    const fake = new FakeInterceptBackend();
+    const { engine } = engineOf(fake);
+    const handle = await engine.intercept();
+    const seen: ProxyAgentConfig[] = [];
+    const factory = (config: ProxyAgentConfig): unknown => {
+      seen.push(config);
+      return config;
+    };
+    await interceptDispatcher(handle, { proxyAgentFactory: factory, allowH2: true });
+    await interceptDispatcher(handle, { proxyAgentFactory: factory, allowH2: false });
+    await interceptDispatcher(handle, { proxyAgentFactory: factory });
+    expect(seen[0]).toEqual({ uri: handle.url, requestTls: { ca: fake.caPemResult }, proxyTls: {}, allowH2: true });
+    expect(seen[1]).toEqual({ uri: handle.url, requestTls: { ca: fake.caPemResult }, proxyTls: {}, allowH2: false });
+    // undici's default is h1; leaving the key out keeps whatever undici defaults to, byte-for-byte as before.
+    expect(seen[2]).toEqual({ uri: handle.url, requestTls: { ca: fake.caPemResult }, proxyTls: {} });
+  });
+
   it('without a proxyAgentFactory and without undici installed, rejects with a clear message', async () => {
     const fake = new FakeInterceptBackend();
     const { engine } = engineOf(fake);
