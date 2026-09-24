@@ -153,7 +153,9 @@ coexist; a second fault of the *same* kind throws rather than silently overwriti
 | `{ proxy: { injectHeaders: { 'X-Foo': 'bar' } } }` | `.injectHeader('X-Foo', 'bar')` (one entry per name, case-insensitive; a second spelling throws) |
 | Rift extension: `{ proxy: { pathRewrite: { from, to } } }` | `.rewritePath(from, to)` |
 | `{ proxy: { key, cert } }` (mTLS to upstream) | `.clientCert({ key, cert })` — **deprecated**: Rift's proxy sends no client certificate; the keys are dropped on parse, no replacement |
-| `proxyTo(...).latency(500)` | Same call — behaviors are legal on a proxy response (the pre-DSL bridge silently dropped these; the current builder doesn't) |
+| `proxyTo(...).latency(500)` | Same call — the builder emits the block; **engine ≥ 0.18.0 runs it** (rift#1189) on the upstream's response before recording, so the generated stub holds the transformed result and a `proxyOnce` replay is not transformed again; a `wait` is not counted in `addWaitBehavior`'s latency. Engine ≤ 0.17.0 accepted the block and ignored it. Scripted behaviors (`decorate`, `shellTransform`, a function `wait`) need `allowInjection` here too (rift#1181) |
+| `{ inject: fn, _behaviors: {...} }` | `inject(fn).latency(...)` — engine ≥ 0.18.0 runs the block on what the function returned (rift#1188); create only syntax-checks the body since 0.18.0 (rift#1183) |
+| `{ fault, _behaviors }` / `{ _rift: { script }, _behaviors }` | `fault(k).repeat(n)` / `script(spec).repeat(n)` — only `repeat` takes effect on these shapes; the rest is reported in `_rift.warnings` (`config_key_ignored`, engine ≥ 0.18.0) |
 
 ## Scripts (`inject` → `_rift.script`)
 

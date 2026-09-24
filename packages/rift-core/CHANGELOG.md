@@ -154,6 +154,17 @@ All notable changes to `@rift-vs/rift` are documented here. This project adheres
 
 ### Changed
 
+- **Docs: what engine 0.18.0 does with behaviors and scripts on each response shape** (issue #147).
+  A `_behaviors` block on a `proxy` (rift#1189) or `inject` (rift#1188) response now runs — on the
+  upstream's response before it is recorded, or on what the function returned — where every
+  earlier engine accepted it and ignored it, so `proxyTo(u).latency(500)` starts delaying after the
+  bump. A `fault` or `script`-only response applies only `repeat` and reports the rest in
+  `_rift.warnings`. Scripted behaviors (`decorate`, `shellTransform`, a function-string `latency`)
+  need `allowInjection` on those shapes too (rift#1181), and creating an imposter only
+  syntax-checks an `inject` body (rift#1183). The builder doc comments, the reference and the
+  migration guide now say all of this; `ScriptEngineConfig.defaultEngine` accepts the engine's
+  `'js'` spelling and its docs say it only reaches a script that names no engine (rift#1159).
+
 - **Docs: the object-form `_behaviors` execution order is Mountebank's since engine 0.18.0** —
   wait → lookup → copy → shellTransform → decorate (rift#1202; issue #140). The guides said
   "copy → lookup → decorate → wait", which was wrong for every engine. The migration guide names

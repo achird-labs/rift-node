@@ -455,7 +455,11 @@ interface ResponseBuilder /* R */ {
   deleteState(key: string): this;
   clearFlowState(): this;
 
-  // behaviors (_behaviors) — execution order in-engine (>= 0.18.0, Mountebank's): wait → lookup → copy →
+  // behaviors (_behaviors) — run on `is`; on proxy/inject on what they returned (>= 0.18.0); on a fault
+  // or script-only response only `repeat` applies (the rest lands in _rift.warnings). decorate /
+  // shellTransform / a function-string latency are scripting surfaces: allowInjection (spawn) or
+  // --allow-injection (remote) or the engine answers 400 invalid injection; embedded FFI is ungated.
+  // Execution order in-engine (>= 0.18.0, Mountebank's): wait → lookup → copy →
   // shellTransform → decorate (<= 0.17.0: wait → copy → lookup → decorate → shellTransform). For another
   // order send the `behaviors` array form alone via raw() — the engine ignores it next to _behaviors.
   latency(ms: number | { min: number; max: number } | string): this;
@@ -529,7 +533,8 @@ interface ProxyBuilder {
   rewritePath(from: string, to: string): this;                        // wire: pathRewrite (Rift ext)
   /** @deprecated */ clientCert(pem: { key: string; cert: string }): this; // no effect: Rift's proxy sends no
                                                                       // client certificate; dropped on parse
-  latency(...) / repeat(...) / decorate(...) etc.                     // _behaviors now legal on proxy
+  latency(...) / repeat(...) / decorate(...) etc.                     // _behaviors on a proxy: engine >= 0.18.0 runs
+                                                                      // them on the upstream response (<= 0.17.0 ignored)
   raw(patch: Partial<wire.StubResponse>): this;
   build(): wire.StubResponse;
 }
@@ -540,7 +545,13 @@ interface PredicateGenerator {
 ```
 
 `ProxyBuilder` extends `ResponseBuilder`, so behavior chainers stay legal on a proxy response and
-are emitted — the pre-M7 silent drop of `proxyTo(...).latency(500)` is gone (#23).
+are emitted — the pre-M7 silent drop of `proxyTo(...).latency(500)` is gone (#23). What the engine
+does with them is a version fact: **≥ 0.18.0 runs the block on the upstream's response before
+recording it** (rift#1189) — the generated stub holds the transformed result, a `proxyOnce` replay
+is not transformed again, a `wait` is not counted in `addWaitBehavior`'s latency, and a failing
+behavior records nothing; ≤ 0.17.0 accepted the block and ignored it. `decorate`, `shellTransform`
+and a function-string `latency` are scripting surfaces and need `allowInjection` on a proxy response
+too (rift#1181).
 
 #### Recording an origin behind a private CA (`upstreamTrust`)
 
@@ -591,6 +602,12 @@ export const Script: {
 ```
 
 Used by `script(spec)` (response generator), `imposter().registerScript(name, spec)` (registry).
+Every constructor names an engine (`rhai`/`js` explicitly, `*File` by extension), so
+`imposter().scriptEngine({ defaultEngine })` only decides the engine of a bare `{ code }` script
+sent through `raw()` or `fromJson` (engine ≥ 0.18.0 honours it, rift#1159; earlier engines ran such
+a script as Rhai regardless). `_rift.script` is a scripting surface: it needs `allowInjection` on
+spawn / `--allow-injection` on a remote engine, and the embedded FFI is not gated. A `_behaviors`
+block beside a script-only response applies only `repeat`.
 
 ### 5.8 Scenarios
 
@@ -645,7 +662,10 @@ interface ImposterBuilder {
   flowIdFromHeader(name: string): this;     // sugar: flowIdSource: `header:${name}`
   /** @deprecated */ metrics(port?: number): this;  // no effect: metrics are process-wide (SpawnOptions.metricsPort);
                                                    // >= 0.18.0 reports config_key_ignored
-  scriptEngine(cfg: { defaultEngine?: 'rhai' | 'javascript'; timeoutMs?: number }): this;
+  scriptEngine(cfg: { defaultEngine?: 'rhai' | 'javascript' | 'js'; timeoutMs?: number }): this;
+      // defaultEngine is honoured by engine >= 0.18.0 (rift#1159) for a script that names no engine:
+      // own `engine`, else `file` extension, else this, else rhai. Script.* always names one, so it
+      // only reaches a bare { code } script sent via raw()/fromJson
   registerScript(name: string, spec: ScriptSpec): this;
   raw(patch: Partial<wire.Imposter>): this;
   build(): wire.Imposter;

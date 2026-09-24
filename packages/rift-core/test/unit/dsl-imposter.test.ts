@@ -165,6 +165,17 @@ describe('DSL #24 — _rift config', () => {
     });
     expect(imposter('s').metrics().build()._rift?.metrics).toEqual({ enabled: true });
   });
+  it("scriptEngine accepts the engine's 'js' spelling, and a Script.* engine always wins over defaultEngine (issue #147)", () => {
+    expect(imposter('s').scriptEngine({ defaultEngine: 'js' }).build()._rift?.scriptEngine).toEqual({ defaultEngine: 'js' });
+    // The DSL always names an engine (Script.js/rhai set it; *File relies on the extension), so
+    // defaultEngine only reaches raw()/fromJson scripts with a bare { code } (rift#1159).
+    const imp = imposter('s')
+      .scriptEngine({ defaultEngine: 'rhai' })
+      .stub(onGet('/x').willReturn(script(Script.js('1'))))
+      .build();
+    expect(imp.stubs?.[0]?.responses?.[0]?._rift?.script).toEqual({ engine: 'js', code: '1' });
+  });
+
   it('scriptEngine(cfg) → _rift.scriptEngine', () => {
     expect(
       imposter('s').scriptEngine({ defaultEngine: 'rhai', timeoutMs: 2000 }).build()._rift

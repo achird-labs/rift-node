@@ -48,6 +48,10 @@ export function not(predicate: Predicate): Predicate {
   return { not: predicate };
 }
 
+/** An `inject` predicate running the given function body. Scripting surface on every engine: needs
+ * `allowInjection: true` on spawn (`--allow-injection` on a remote engine) or the engine answers 400
+ * `invalid injection`, whatever response shape the stub carries; imposters created over the
+ * embedded FFI are not gated. */
 export function injectPredicate(jsFn: string): Predicate {
   return { inject: jsFn };
 }
