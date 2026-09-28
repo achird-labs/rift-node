@@ -19,6 +19,7 @@ import {
   isBlank,
 } from '../apikey.js';
 import type { InterceptOptions } from '../intercept/types.js';
+import type { StubWarningsPolicy } from '../engine.js';
 import { hostForUrl } from '../host.js';
 import {
   MIN_UPSTREAM_TRUST_ENGINE,
@@ -211,6 +212,14 @@ export function probeBinaryVersion(binaryPath: string): string | undefined {
 const defaultSpawnDeps: SpawnDeps = { spawn: spawnProcess, resolveBinary, probeVersion: probeBinaryVersion };
 
 export interface SpawnOptions {
+  /** What `create()` / `replaceAll()` do with the engine's stub analysis (`_rift.warnings`, issue
+   * #170): `'warn'` (default) prints one `console.warn` per warning, `'fail'` deletes the imposter(s)
+   * and throws `StubWarningsError` (for `replaceAll()`: the whole batch, leaving no imposters — the
+   * previous set is already gone), `'ignore'` does neither. `catch_all` (a predicate-less stub) and
+   * `truncated` never trigger it; `ImposterHandle.warnings()` returns every kind under any policy.
+   * `replaceAll()`, and `create()` on the embedded transport, read each imposter's warnings with one
+   * extra call. */
+  stubWarnings?: StubWarningsPolicy;
   /** Admin port to bind. Defaults to an OS-assigned ephemeral port. */
   port?: number;
   /** Bind address, passed to the engine's `--host`. Must be an IP literal — the engine refuses a

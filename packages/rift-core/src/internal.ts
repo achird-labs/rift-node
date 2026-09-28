@@ -24,6 +24,9 @@ export * from './model/index.js';
 // backend must serialize, not something a user of the SDK composes with.
 export { stringifyJsonSafe } from './model/serialize.js';
 
+// Both transports read the engine's `_rift.warnings` through the same validation (issue #170).
+export { parseEngineWarnings } from './model/warnings.js';
+
 export { toRecordedRequest } from './verify/index.js';
 export { evalPredicates } from './verify/eval.js';
 

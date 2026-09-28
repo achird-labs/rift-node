@@ -25,6 +25,7 @@ import type { AdminApi, Imposter, Stub } from '@rift-vs/rift/internal';
 // -------------------------------------------------------------------------------------------
 
 class FakeNativeEngine implements NativeEngineLike {
+  warningsByPort = new Map<number, string>();
   readonly buildInfo: string;
   calls: Array<{ fn: string; args: unknown[] }> = [];
   closeCalls = 0;
@@ -40,6 +41,11 @@ class FakeNativeEngine implements NativeEngineLike {
   constructor(buildInfo: Record<string, unknown>, startPort = 6000) {
     this.buildInfo = JSON.stringify(buildInfo);
     this.#nextPort = startPort;
+  }
+
+  async stubWarnings(port: number): Promise<string> {
+    this.calls.push({ fn: 'stubWarnings', args: [port] });
+    return this.warningsByPort.get(port) ?? '[]';
   }
 
   async createImposter(json: string): Promise<number> {
@@ -966,6 +972,72 @@ describe('issue #112 — embedded FFI payloads are JSON-safe', () => {
       await engine.admin.createImposter(def);
       const call = native.calls.find((c) => c.fn === 'createImposter');
       expect(call?.args[0]).toBe(JSON.stringify(def));
+    } finally {
+      await engine.close();
+    }
+  });
+});
+
+describe('issue #170 — EmbeddedAdmin.stubWarnings reads rift_stub_warnings', () => {
+  const IGNORED = { warningType: 'config_key_ignored', message: '`recordMatches` has no effect' };
+
+  async function withEngine(
+    options: Parameters<typeof createEmbeddedEngine>[0] = {}
+  ): Promise<{ engine: Awaited<ReturnType<typeof createEmbeddedEngine>>; native: FakeNativeEngine }> {
+    const native = new FakeNativeEngine(goodBuildInfo());
+    const engine = await createEmbeddedEngine(options, { loadNativeEngine: async () => native });
+    return { engine, native };
+  }
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  it('parses the native JSON array for a known port', async () => {
+    const { engine, native } = await withEngine();
+    try {
+      const created = await engine.admin.createImposter({ port: 0, protocol: 'http', stubs: [] });
+      native.warningsByPort.set(created.port as number, JSON.stringify([IGNORED]));
+      expect(await engine.admin.stubWarnings(created.port as number)).toEqual([IGNORED]);
+      expect(native.calls.filter((c) => c.fn === 'stubWarnings')).toEqual([{ fn: 'stubWarnings', args: [created.port] }]);
+    } finally {
+      await engine.close();
+    }
+  });
+
+  it('refuses invalid JSON and a malformed list with RiftError, never reading them as no warnings', async () => {
+    const { engine, native } = await withEngine();
+    try {
+      const created = await engine.admin.createImposter({ port: 0, protocol: 'http', stubs: [] });
+      const port = created.port as number;
+      native.warningsByPort.set(port, 'not json');
+      await expect(engine.admin.stubWarnings(port)).rejects.toThrow(/rift_stub_warnings\(\d+\) returned invalid JSON/);
+      native.warningsByPort.set(port, JSON.stringify({ warningType: 'x', message: 'y' }));
+      await expect(engine.admin.stubWarnings(port)).rejects.toThrow(RiftError);
+    } finally {
+      await engine.close();
+    }
+  });
+
+  it('an unknown port is ImposterNotFound, before any native call', async () => {
+    const { engine, native } = await withEngine();
+    try {
+      await expect(engine.admin.stubWarnings(49999)).rejects.toThrow(ImposterNotFound);
+      expect(native.calls.filter((c) => c.fn === 'stubWarnings')).toEqual([]);
+    } finally {
+      await engine.close();
+    }
+  });
+
+  it("createEmbeddedEngine carries stubWarnings: 'fail' to create(), which deletes and throws", async () => {
+    const { engine, native } = await withEngine({ stubWarnings: 'fail' });
+    try {
+      native.warningsByPort.set(6000, JSON.stringify([IGNORED]));
+      await expect(engine.create({ protocol: 'http', name: 'x' })).rejects.toMatchObject({
+        name: 'StubWarningsError',
+        imposters: [{ port: 6000, name: 'x', warnings: [IGNORED] }],
+      });
+      expect(native.calls.map((c) => c.fn)).toEqual(['createImposter', 'stubWarnings', 'deleteImposter']);
     } finally {
       await engine.close();
     }

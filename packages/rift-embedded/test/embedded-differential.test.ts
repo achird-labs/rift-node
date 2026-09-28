@@ -33,6 +33,7 @@ import type { Imposter } from '@rift-vs/rift/internal';
 // -------------------------------------------------------------------------------------------
 
 class FakeNativeEngine implements NativeEngineLike {
+  warningsByPort = new Map<number, string>();
   readonly buildInfo: string;
   calls: Array<{ fn: string; args: unknown[] }> = [];
   #imposters = new Map<number, unknown>();
@@ -46,6 +47,11 @@ class FakeNativeEngine implements NativeEngineLike {
       features: [],
     });
     this.#nextPort = startPort;
+  }
+
+  async stubWarnings(port: number): Promise<string> {
+    this.calls.push({ fn: 'stubWarnings', args: [port] });
+    return this.warningsByPort.get(port) ?? '[]';
   }
 
   async createImposter(json: string): Promise<number> {

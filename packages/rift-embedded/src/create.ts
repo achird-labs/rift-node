@@ -158,6 +158,7 @@ export async function createEmbeddedEngine(
   return new Engine(admin, 'embedded', {
     engineVersion: buildInfo.version,
     versionCheck: options.versionCheck ?? 'fail',
+    stubWarnings: options.stubWarnings,
     buildInfo: async () => admin.buildInfo,
     adminUrl: () => admin.adminUrl(),
     interceptBackend: new EmbeddedInterceptBackend(native),

@@ -7,7 +7,8 @@
  */
 
 import { writeFile } from 'fs/promises';
-import type { Imposter, ImpostersConfig, RecordedRequest, Stub } from '../model/index.js';
+import type { EngineWarning, Imposter, ImpostersConfig, RecordedRequest, Stub } from '../model/index.js';
+import { parseImposterWarnings } from '../model/warnings.js';
 import { stringifyJsonSafe } from '../model/serialize.js';
 import {
   CommunicationError,
@@ -90,6 +91,12 @@ export class RemoteClient implements AdminApi {
 
   async deleteAllImposters(): Promise<void> {
     await this.request('/imposters', { method: 'DELETE', allowEmpty: true });
+  }
+
+  /** The admin API has no warnings route: the block rides on the imposter detail as
+   * `_rift.warnings`, omitted (with `_rift` itself) when empty. */
+  async stubWarnings(port: number): Promise<EngineWarning[]> {
+    return parseImposterWarnings(await this.getImposter(port), `GET /imposters/${port}`);
   }
 
   async replaceImposters(config: ImpostersConfig): Promise<ImpostersConfig> {
