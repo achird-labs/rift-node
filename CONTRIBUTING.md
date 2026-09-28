@@ -24,8 +24,20 @@ npm run test:unit      # unit tests only (no rift binary needed)
 ```
 
 The unit tests are hermetic. The integration tests self-skip unless a rift binary is
-discoverable (via `RIFT_BINARY_PATH`, `PATH`, or the downloaded `binaries/` copy). Set
-`RIFT_SKIP_BINARY_DOWNLOAD=1` to skip the postinstall binary download (CI does this).
+discoverable (via `RIFT_BINARY_PATH` or `PATH`), and several also skip below the engine version
+they pin. To run them against the engine this SDK pins (`DEFAULT_ENGINE_VERSION` in
+`src/spawn/resolve.ts`), as the CI `spawn integration` job does:
+
+```sh
+npm run build
+BIN="$(cd packages/rift-core && npx rift-fetch --bin)"   # checksummed download into ~/.cache/rift-node
+"$BIN" --version                                          # must print the pinned version
+RIFT_BINARY_PATH="$BIN" npm run test:integration
+```
+
+`rift-fetch --bin` returns a `rift-http-proxy` found on `PATH` in preference to the pin, whatever
+its version, so check `--version` if you have a local engine build installed. `RIFT_OFFLINE=1` or
+`RIFT_SKIP_BINARY_DOWNLOAD=1` keeps every other code path off the network (CI sets it workflow-wide).
 
 ### Replaying the sdk-conformance corpus
 
