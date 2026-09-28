@@ -52,6 +52,59 @@ jobs:
       - name: Test
         run: npm test
 
+  # The spawn-lane integration suites self-skip without an engine binary, and every other job runs
+  # air-gapped (RIFT_SKIP_BINARY_DOWNLOAD above), so without this job none of them ever ran (#154).
+  # The engine is the SDK's own pin, DEFAULT_ENGINE_VERSION in src/spawn/resolve.ts, fetched by
+  # `rift-fetch --bin` (which lifts the air-gap for its own call only), so an engine-bump PR tests
+  # the engine it bumps to. Unlike the cdylib fetch in the embedded lanes this fetch is NOT
+  # best-effort: a lane that skips because the fetch failed would report green having run nothing.
+  spawn-integration:
+    name: spawn integration (ubuntu-latest · pinned engine)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      # Both packages: rift-fetch imports core's dist/, and embedded-smoke resolves
+      # @rift-vs/rift-embedded through its dist/ even when it goes on to skip.
+      - name: Build
+        run: npm run build
+
+      # resolveBinary's cache root is os.homedir()/.cache/rift-node/binaries (RIFT_CACHE_DIR only
+      # moves the cdylib cache). Keyed on the pin's source file, so a bump fetches once.
+      - name: Cache the pinned engine binary
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/rift-node/binaries
+          key: rift-engine-${{ runner.os }}-${{ hashFiles('packages/rift-core/src/spawn/resolve.ts') }}
+
+      # resolveBinary prefers a PATH hit over the pin, so assert the version: a runner image that
+      # ships some other rift must fail here, not silently skip the >= 0.18.0-gated suites.
+      - name: Fetch the pinned engine
+        id: fetch-bin
+        working-directory: packages/rift-core
+        run: |
+          set -euo pipefail
+          bin="$(npx rift-fetch --bin)"
+          pin="$(sed -n "s/^export const DEFAULT_ENGINE_VERSION = 'v\([0-9.]*\)';/\1/p" src/spawn/resolve.ts)"
+          test -n "$pin" || { echo "::error::could not read DEFAULT_ENGINE_VERSION from src/spawn/resolve.ts"; exit 1; }
+          reported="$("$bin" --version)"
+          echo "engine: $bin -> $reported (pinned $pin)"
+          [ "$reported" = "rift $pin" ] || { echo "::error::fetched '$reported', pinned 'rift $pin'"; exit 1; }
+          echo "bin=$bin" >> "$GITHUB_OUTPUT"
+
+      - name: Spawn-lane integration tests
+        run: npm run test:integration
+        env:
+          RIFT_BINARY_PATH: ${{ steps.fetch-bin.outputs.bin }}
+
   docs:
     name: docs (examples + embed check)
     runs-on: ubuntu-latest
