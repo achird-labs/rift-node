@@ -7,6 +7,13 @@ All notable changes to `@rift-vs/rift` are documented here. This project adheres
 
 ### Added
 
+- **`RiftServer` declares its events: `on` / `once` / `off` typed by the new `RiftServerEvents`**
+  (issue #176). The compat `create()` server has always re-emitted the engine process's `'error'`,
+  `'exit'`, `'stdout'` and `'stderr'`, and the reference lists those events as contract, but the
+  public type declared none of them, so every subscription needed a cast. Unknown event names and
+  mistyped listeners are now compile errors. Node's rule for `'error'` is unchanged and now
+  documented: emitted with no listener, it throws and takes the host down.
+
 - **Engine warnings reach the caller: `handle.warnings()` and the `stubWarnings` option** (issue
   #170). The engine attaches its analysis of every imposter to `_rift.warnings`: keys it parses and
   ignores (`config_key_ignored`, engine 0.18.0, rift#1152), `_rift.stateOps` on a response that never

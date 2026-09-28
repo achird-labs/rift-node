@@ -111,13 +111,82 @@ describe('issue #28 — create() spawn-failure and child-error delivery', () => 
 
     const server = await create({ port: 45701 }, deps);
     const seen: Error[] = [];
-    // RiftServer does not declare the emitter surface the compat server has at runtime.
-    (server as unknown as EventEmitter).on('error', (err: Error) => seen.push(err));
+    server.on('error', (err) => seen.push(err));
 
     child.emit('error', new Error('engine hiccup'));
 
     expect(seen).toHaveLength(1);
     expect(seen[0].message).toBe('engine hiccup');
+  });
+
+  describe('RiftServer events are typed and forwarded (issue #176)', () => {
+    it("forwards the child's exit as (code, signal)", async () => {
+      serverUpImmediately();
+      const { child, deps } = fakeChildDeps();
+      const server = await create({ port: 45702 }, deps);
+      const exits: Array<[number | null, NodeJS.Signals | null]> = [];
+      server.on('exit', (code, signal) => exits.push([code, signal]));
+
+      child.emit('exit', 0, null);
+      child.emit('exit', null, 'SIGTERM');
+
+      expect(exits).toEqual([
+        [0, null],
+        [null, 'SIGTERM'],
+      ]);
+    });
+
+    it('forwards stdout and stderr chunks as strings', async () => {
+      serverUpImmediately();
+      const { child, deps } = fakeChildDeps();
+      const server = await create({ port: 45703 }, deps);
+      const out: string[] = [];
+      const err: string[] = [];
+      server.on('stdout', (chunk) => out.push(chunk));
+      server.on('stderr', (chunk) => err.push(chunk));
+
+      child.stdout.emit('data', Buffer.from('listening on 45703'));
+      child.stderr.emit('data', Buffer.from('WARN something'));
+
+      expect(out).toEqual(['listening on 45703']);
+      expect(err).toEqual(['WARN something']);
+    });
+
+    it('once() fires a single time and off() detaches', async () => {
+      serverUpImmediately();
+      const { child, deps } = fakeChildDeps();
+      const server = await create({ port: 45704 }, deps);
+      const onceSeen: string[] = [];
+      const offSeen: string[] = [];
+      const detached = (chunk: string): void => {
+        offSeen.push(chunk);
+      };
+      server.once('stdout', (chunk) => onceSeen.push(chunk));
+      server.on('stdout', detached);
+      server.off('stdout', detached);
+
+      child.stdout.emit('data', 'a');
+      child.stdout.emit('data', 'b');
+
+      expect(onceSeen).toEqual(['a']);
+      expect(offSeen).toEqual([]);
+    });
+
+    it('rejects unknown events and mistyped listeners at compile time', async () => {
+      serverUpImmediately();
+      const { deps } = fakeChildDeps();
+      const server = await create({ port: 45705 }, deps);
+      // `npm run typecheck:tests` enforces these; at runtime they only register listeners.
+      // @ts-expect-error 'data' is not a RiftServer event
+      server.on('data', () => {});
+      // @ts-expect-error stdout chunks are strings
+      server.on('stdout', (n: number) => n);
+      // @ts-expect-error exit's code is number | null, not string
+      server.on('exit', (code: string) => code);
+      // @ts-expect-error error listeners receive an Error
+      server.on('error', (n: number) => n);
+      expect(typeof server.on).toBe('function');
+    });
   });
 
   it('AC3: clean early exit (code 0) during startup rejects promptly with a code-0 message', async () => {

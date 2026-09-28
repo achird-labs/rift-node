@@ -145,6 +145,9 @@ const server = await create({ port: 2525 });
 await server.close();
 ```
 
+`server` also re-emits the engine process's `'error'`, `'exit'`, `'stdout'` and `'stderr'` events,
+typed by `RiftServerEvents` — see [the reference §10](https://achird-labs.github.io/rift-node/reference/sdk-api/#10-mountebank-compat-permanent).
+
 ## Feature tour
 
 | Feature | What it does | Reference |

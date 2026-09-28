@@ -23,7 +23,7 @@ import { resolveBinary } from '../spawn/resolve.js';
 import { resolveApiKey } from '../spawn/spawn.js';
 import { assertInterceptAuthValid } from '../apikey.js';
 import { UnsupportedCreateOptionError } from '../errors.js';
-import type { CreateOptions, RiftServer } from '../types.js';
+import type { CreateOptions, RiftServer, RiftServerEvents } from '../types.js';
 
 const DEFAULT_PORT = 2525;
 const DEFAULT_HOST = 'localhost';
@@ -32,7 +32,7 @@ const HEALTH_CHECK_INTERVAL_MS = 100;
 const SHUTDOWN_TIMEOUT_MS = 5000;
 
 /** Internal implementation of {@link RiftServer}. */
-class RiftServerImpl extends EventEmitter implements RiftServer {
+class RiftServerImpl extends EventEmitter<RiftServerEvents> implements RiftServer {
   public readonly port: number;
   public readonly host: string;
   private process: ChildProcess | null;
@@ -281,6 +281,6 @@ export async function create(
   return new RiftServerImpl(port, host, proc);
 }
 
-export type { CreateOptions, RedisOptions, RiftServer } from '../types.js';
+export type { CreateOptions, RedisOptions, RiftServer, RiftServerEvents } from '../types.js';
 
 export default { create };
