@@ -44,5 +44,10 @@ describeOrSkip('issue #21 — RFC quick-start over spawn', () => {
     const first = await fetch(`${users.url}/api/users`, { method: 'POST' });
     const second = await fetch(`${users.url}/api/users`, { method: 'POST' });
     expect([first.status, second.status].sort()).toEqual([201, 503]);
+
+    // Read back, `statusCode` is a string: the engine writes Mountebank's format (issue #155).
+    const exported = await users.toJson();
+    expect(exported.stubs?.[0]?.responses?.[0]?.is?.statusCode).toBe('200');
+    expect(exported.stubs?.[1]?.responses?.map((r) => r.is?.statusCode)).toEqual(['201', '503']);
   }, 45_000);
 });

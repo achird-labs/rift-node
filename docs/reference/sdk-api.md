@@ -104,7 +104,9 @@ await users.verify(onGet('/api/users/1'), times(1)); // throws VerificationError
 
 - **Root export hygiene** (shipped in #25, breaking but pre-publish): the legacy weak types
   (`Predicate`/`Response`/`Stub`/`Imposter`/`ImposterConfig`/`ServerInfo` from `src/types.ts`)
-  left the root — root names belong to the DSL + wire model. The Mountebank-compat surface
+  left the root — root names belong to the DSL + wire model. All but `ServerInfo` were later
+  deleted outright (#155): their `is.statusCode: number` contradicted the string the engine reads
+  back. The Mountebank-compat surface
   (`create`, `CreateOptions`, `RiftServer`, default export `{ create }`) stays at the root (it is
   a permanent product surface) and is also importable from `./compat`.
 
@@ -199,6 +201,12 @@ interface ImposterHandle extends AsyncDisposable {
   delete(): Promise<void>;                 // [Symbol.asyncDispose] delegates here (idempotent)
 }
 ```
+
+**`statusCode` on the read path.** `toJson()`, `stubs()` and `space().stubs()` return
+`is.statusCode` as a **string** (`'200'`): the engine writes Mountebank's format on imposter and
+space stubs, whatever type was posted, and `wire.IsResponse.statusCode` is `number | string` for
+it. Intercept `rules()` return it as a **number**, since the rule store holds one. Compare with
+`Number(is.statusCode)` (or `String(...)`) rather than `toEqual({ statusCode: 200 })`.
 
 Reading a `toJson()` result back with the 0.18.0 shapes typed (`wire.StubResponse.behaviors`,
 `.repeat`, `wire.RiftResponseExtension.dataset`, `wire.RiftImposterConfig.sequencing`):

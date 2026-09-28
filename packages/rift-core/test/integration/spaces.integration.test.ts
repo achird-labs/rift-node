@@ -45,12 +45,12 @@ describeOrSkip('issue #142 — space stubs over spawn', () => {
     const listed = await alice.stubs();
     expect(listed.space).toBe('alice');
     expect(listed.stubs).toHaveLength(1);
-    // `statusCode` is deliberately not pinned here: the engine writes it back as a string on
-    // every read path, which is unrelated to this route. The live fetch below proves the 200.
+    // The engine writes `statusCode` back as a string on imposter and space stubs — Mountebank's
+    // format, deliberately (issue #155); `IsResponse.statusCode` is typed `number | string` for it.
     expect(listed.stubs[0]).toMatchObject({
       space: 'alice',
       predicates: [{ equals: { path: '/data' } }],
-      responses: [{ is: expect.objectContaining({ body: { owner: 'alice' } }) }],
+      responses: [{ is: { statusCode: '200', body: { owner: 'alice' } } }],
     });
 
     const inFlow = await fetch(`${tenants.url}/data`, { headers: { 'X-Mock-Space': 'alice' } });

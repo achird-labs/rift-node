@@ -7,6 +7,14 @@ All notable changes to `@rift-vs/rift` are documented here. This project adheres
 
 ### Added
 
+- **The read-path `statusCode` rule is documented and pinned** (issue #155): imposter and space
+  stubs read back `is.statusCode` as a string (`'200'`), the engine's deliberate Mountebank format,
+  while intercept `rules()` read it back as a number. `wire.IsResponse.statusCode` was already
+  `number | string`; the reference now says which path returns which, and the spawn-lane
+  integration suites pin all three. The unexported legacy `Predicate`/`Response`/`Stub`/
+  `ImposterConfig`/`Imposter` interfaces in `src/types.ts`, whose `is.statusCode: number` said
+  otherwise, are deleted (no public surface changes: they left the root in #25).
+
 - **`interceptDispatcher(handle, { allowH2 })`** (issue #151): passes undici's `allowH2` through
   so an in-process `fetch` negotiates HTTP/2 with the intercept tunnel, which offers `h2, http/1.1`
   since engine 0.18.0 (rift#996); omitted, undici's HTTP/1.1 default applies and the config is

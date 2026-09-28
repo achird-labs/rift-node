@@ -11,7 +11,8 @@ import fs from 'fs';
 import os from 'os';
 import { execSync } from 'child_process';
 import { create } from '../../src/index.js';
-import type { RiftServer, ImposterConfig, Imposter } from '../../src/types.js';
+import type { RiftServer } from '../../src/types.js';
+import type { Imposter } from '../../src/model/index.js';
 
 // POST an imposter and assert the create succeeded. `fetch` (unlike axios) does not throw on a
 // non-2xx status, so setup POSTs must be checked explicitly — otherwise a broken create silently
@@ -108,7 +109,7 @@ conditionalDescribe('Mountebank API Compatibility', () => {
 
       it('returns list of imposters', async () => {
         // Create an imposter first
-        const imposter: ImposterConfig = {
+        const imposter: Imposter = {
           port: 4545,
           protocol: 'http',
           stubs: [
@@ -135,7 +136,7 @@ conditionalDescribe('Mountebank API Compatibility', () => {
 
     describe('POST /imposters', () => {
       it('creates a simple imposter', async () => {
-        const imposter: ImposterConfig = {
+        const imposter: Imposter = {
           port: 4546,
           protocol: 'http',
           stubs: [
@@ -166,7 +167,7 @@ conditionalDescribe('Mountebank API Compatibility', () => {
       });
 
       it('imposter responds to requests', async () => {
-        const imposter: ImposterConfig = {
+        const imposter: Imposter = {
           port: 4547,
           protocol: 'http',
           stubs: [
@@ -199,7 +200,7 @@ conditionalDescribe('Mountebank API Compatibility', () => {
       });
 
       it('creates imposter with predicates', async () => {
-        const imposter: ImposterConfig = {
+        const imposter: Imposter = {
           port: 4548,
           protocol: 'http',
           stubs: [
@@ -241,7 +242,7 @@ conditionalDescribe('Mountebank API Compatibility', () => {
 
     describe('GET /imposters/:port', () => {
       it('returns specific imposter', async () => {
-        const imposter: ImposterConfig = {
+        const imposter: Imposter = {
           port: 4549,
           protocol: 'http',
           name: 'Test Imposter',
@@ -274,7 +275,7 @@ conditionalDescribe('Mountebank API Compatibility', () => {
 
     describe('DELETE /imposters/:port', () => {
       it('deletes specific imposter', async () => {
-        const imposter: ImposterConfig = {
+        const imposter: Imposter = {
           port: 4550,
           protocol: 'http',
           stubs: [{ responses: [{ is: { statusCode: 200 } }] }],
