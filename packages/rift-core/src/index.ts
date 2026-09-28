@@ -62,6 +62,7 @@ export type {
   EmbeddedOptions,
   InterceptHandle,
   InterceptOptions,
+  StubWarningsPolicy,
 } from './engine.js';
 export type { UpstreamTrust } from './upstream-trust.js';
 

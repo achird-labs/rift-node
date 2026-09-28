@@ -21,7 +21,7 @@ import {
 import { collectLeafDetails, computeClosest, evalPredicates } from '../../src/verify/eval.js';
 import { renderVerificationFailure } from '../../src/verify/render.js';
 import * as rootExports from '../../src/index.js';
-import type { Imposter, ImpostersConfig, Predicate, Stub, RecordedRequest as WireRecordedRequest } from '../../src/model/index.js';
+import type { EngineWarning, Imposter, ImpostersConfig, Predicate, Stub, RecordedRequest as WireRecordedRequest } from '../../src/model/index.js';
 
 // --- shared test fixtures ------------------------------------------------------------------------
 
@@ -518,6 +518,9 @@ class FakeAdminApi implements AdminApi {
     const imp = await this.getImposter(port);
     this.imposters.delete(port);
     return imp;
+  }
+  async stubWarnings(): Promise<EngineWarning[]> {
+    return [];
   }
   async deleteAllImposters(): Promise<void> {
     this.imposters.clear();

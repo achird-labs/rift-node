@@ -9,7 +9,7 @@ import { jest } from '@jest/globals';
 import { Engine, type AdminApi } from '../../src/engine.js';
 import { imposter, onGet, ok, okJson } from '../../src/dsl/index.js';
 import { ImposterNotFound, EngineVersionError, EngineUnavailable } from '../../src/errors.js';
-import type { Imposter, ImpostersConfig, Stub, RecordedRequest } from '../../src/model/index.js';
+import type { EngineWarning, Imposter, ImpostersConfig, Stub, RecordedRequest } from '../../src/model/index.js';
 
 /** In-memory AdminApi backing store. Assigns ports from 5000 up when a create omits `port`. */
 class FakeAdminApi implements AdminApi {
@@ -51,6 +51,9 @@ class FakeAdminApi implements AdminApi {
     if (!imp) throw new ImposterNotFound(`no imposter on ${port}`);
     this.imposters.delete(port);
     return imp;
+  }
+  async stubWarnings(): Promise<EngineWarning[]> {
+    return [];
   }
   async deleteAllImposters(): Promise<void> {
     this.imposters.clear();

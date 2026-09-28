@@ -7,6 +7,23 @@ All notable changes to `@rift-vs/rift` are documented here. This project adheres
 
 ### Added
 
+- **Engine warnings reach the caller: `handle.warnings()` and the `stubWarnings` option** (issue
+  #170). The engine attaches its analysis of every imposter to `_rift.warnings`: keys it parses and
+  ignores (`config_key_ignored`, engine 0.18.0, rift#1152), `_rift.stateOps` on a response that never
+  runs them (`state_ops_never_runs`, rift#969), and duplicate, shadowed or catch-all stubs. The SDK
+  never read it. `ImposterHandle.warnings()` now returns it (typed `wire.EngineWarning`), and
+  `create()` / `replaceAll()` act on it per the new `stubWarnings` option of `rift.connect()`,
+  `rift.spawn()` and `rift.embedded()`: **`'warn'` (the default) prints one `console.warn` per
+  warning**, `'fail'` deletes the imposter(s) again and throws the new `StubWarningsError`, and
+  `'ignore'` does neither. `catch_all` and `truncated` never trigger it. `create()` over
+  connect/spawn reads the `POST` reply; `replaceAll()` and embedded `create()` make one extra call per
+  imposter (`GET /imposters/:port`, `rift_stub_warnings`). Under `'fail'`, `replaceAll()` deletes the
+  whole batch, and since the `PUT` already replaced the previous set the engine is left empty. A
+  warnings block that cannot be read is reported (`'warn'`) or fails the call (`'fail'`), never read
+  as clean. `AdminApi` gains `stubWarnings(port)` and `@rift-vs/rift-embedded`'s `NativeEngineLike`
+  gains `stubWarnings(port)`, so custom implementations of either must add it. A posted `_rift.warnings` (a `toJson()` result
+  sent back) is now stripped before sending.
+
 - **The read-path `statusCode` rule is documented and pinned** (issue #155): imposter and space
   stubs read back `is.statusCode` as a string (`'200'`), the engine's deliberate Mountebank format,
   while intercept `rules()` read it back as a number. `wire.IsResponse.statusCode` was already

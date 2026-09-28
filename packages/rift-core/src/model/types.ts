@@ -175,7 +175,37 @@ export interface Behaviors {
 
 // --- _rift extensions (open shapes; preserved verbatim) ---
 
+/** `_rift.warnings[].warningType`: the engine's `WarningType`, snake_case. Open-ended so a kind a
+ * newer engine adds still reads back typed. */
+export type EngineWarningType =
+  | 'config_key_ignored'
+  | 'state_ops_never_runs'
+  | 'duplicate_id'
+  | 'exact_duplicate'
+  | 'potentially_shadowed'
+  | 'catch_all'
+  | 'catch_all_not_last'
+  | 'truncated'
+  | (string & Record<never, never>);
+
+/** One entry of the engine's stub analysis (`StubWarning`): a key it parses and does not act on
+ * (`config_key_ignored`, engine >= 0.18.0), `_rift.stateOps` on a response that never runs them
+ * (`state_ops_never_runs`, >= 0.18.0), or a duplicate / shadowed / catch-all stub. */
+export interface EngineWarning {
+  warningType: EngineWarningType;
+  message: string;
+  stubIndex?: number;
+  stubId?: string;
+  /** For `potentially_shadowed` / `exact_duplicate`: the earlier stub that wins. */
+  shadowedByIndex?: number;
+  [key: string]: unknown;
+}
+
 export interface RiftImposterConfig {
+  /** Read path only: written by `POST /imposters` and `GET /imposters/:port`, never by
+   * `PUT /imposters`, and absent from the embedded transport's objects. `create()` strips it before
+   * sending. Read it with `ImposterHandle.warnings()`. */
+  warnings?: EngineWarning[];
   flowState?: JsonValue;
   metrics?: JsonValue;
   proxy?: JsonValue;

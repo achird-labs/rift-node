@@ -65,6 +65,7 @@ function fakeImposterHandle(
     disable: unimplemented('disable'),
     clearProxyRecordings: unimplemented('clearProxyRecordings'),
     toJson: unimplemented('toJson'),
+    warnings: unimplemented('warnings'),
     delete: deleteMock,
     [Symbol.asyncDispose]: deleteMock,
   };

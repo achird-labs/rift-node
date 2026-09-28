@@ -157,6 +157,7 @@ await server.close();
 | Spaces / flow state | Per-flow-id stub/verification scoping over one shared imposter | [Isolation](#isolation) below |
 | Proxy record/replay | `proxyTo(url).proxyOnce()/.proxyAlways()`, `generatePredicates()`, `pathRewrite()` | [migration §proxy](https://achird-labs.github.io/rift-node/mountebank/migration/#proxy) |
 | Intercept (TLS-MITM) | `engine.intercept()` — `serve`/`forward`/`redirectTo`, CA + trust helpers | [`docs/design/sdk-api.md` §7](https://achird-labs.github.io/rift-node/reference/sdk-api/#7-intercept-tls-mitm) |
+| Engine warnings | `handle.warnings()` + the `stubWarnings: 'warn' \| 'fail' \| 'ignore'` option — inert config keys, shadowed and duplicate stubs, as the engine reports them | [`docs/design/sdk-api.md` §3.3](https://achird-labs.github.io/rift-node/reference/sdk-api/#33-imposterhandle) |
 | Verification | `imposter.verify(match, times(n))` — WireMock-style near-miss diffs | [migration §verification](https://achird-labs.github.io/rift-node/mountebank/migration/#verification) |
 | Testkit | `@rift-vs/rift/testkit/vitest` fixtures, `@rift-vs/rift/testkit/jest` helpers | [Testkit](#testkit) below |
 

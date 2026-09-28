@@ -11,7 +11,7 @@
  * preserve its historical contract; everything else in the SDK throws one of the classes below.
  */
 
-import type { Predicate } from './model/index.js';
+import type { EngineWarning, Predicate } from './model/index.js';
 import type { CountMatcher, RecordedRequest } from './verify/index.js';
 
 /**
@@ -154,6 +154,25 @@ export class EngineVersionError extends RiftError {
     this.name = 'EngineVersionError';
     this.found = found;
     this.required = required;
+  }
+}
+
+/** One imposter whose stub analysis tripped `stubWarnings: 'fail'`. */
+export interface ImposterWarnings {
+  readonly port: number;
+  readonly name?: string;
+  readonly warnings: readonly EngineWarning[];
+}
+
+/** `stubWarnings: 'fail'`: the engine accepted the imposter(s) but reported warnings, so they were
+ * deleted again. `imposters` lists each offender with the warnings that triggered the failure. */
+export class StubWarningsError extends RiftError {
+  readonly imposters: readonly ImposterWarnings[];
+
+  constructor(message: string, imposters: readonly ImposterWarnings[], options?: ErrorOptions) {
+    super(message, options);
+    this.name = 'StubWarningsError';
+    this.imposters = imposters;
   }
 }
 

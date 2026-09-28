@@ -15,6 +15,7 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 
 import type {
+  EngineWarning,
   Imposter,
   ImpostersConfig,
   InterceptRule,
@@ -35,8 +36,11 @@ import {
   InterceptUnavailable,
   InvalidDefinition,
   RiftError,
+  StubWarningsError,
   VerificationError,
+  type ImposterWarnings,
 } from './errors.js';
+import { parseImposterWarnings } from './model/warnings.js';
 import {
   atLeast,
   predicatesOf,
@@ -90,6 +94,9 @@ export interface AdminApi extends AsyncDisposable {
   ): Promise<Imposter>;
   deleteImposter(port: number): Promise<Imposter>;
   deleteAllImposters(): Promise<void>;
+  /** The engine's current stub analysis for `port` (`_rift.warnings`), `[]` when it reports none.
+   * A malformed block throws `RiftError` rather than reading as no warnings. */
+  stubWarnings(port: number): Promise<EngineWarning[]>;
   replaceImposters(config: ImpostersConfig): Promise<ImpostersConfig>;
 
   addStub(port: number, stub: Stub, index?: number): Promise<void>;
@@ -201,6 +208,9 @@ export interface ImposterHandle extends AsyncDisposable {
   disable(): Promise<void>;
   clearProxyRecordings(): Promise<void>;
   toJson(opts?: { replayable?: boolean; removeProxies?: boolean }): Promise<Imposter>;
+  /** The engine's current stub analysis for this imposter — every kind, `catch_all` included. The
+   * engine recomputes it on each stub change, so this reads it fresh. `[]` when it reports none. */
+  warnings(): Promise<EngineWarning[]>;
   delete(): Promise<void>;
 }
 
@@ -275,10 +285,28 @@ export interface RiftEngine extends AsyncDisposable {
 // --- helpers -------------------------------------------------------------------------------
 
 function toWireImposter(def: ImposterBuilder | Imposter): Imposter {
-  const wire = def instanceof ImposterBuilder ? def.build() : def;
+  const wire = withoutReadOnlyWarnings(def instanceof ImposterBuilder ? def.build() : def);
   // Protocol is required by Mountebank; default to 'http' if not specified
   return wire.protocol === undefined ? { ...wire, protocol: 'http' } : wire;
 }
+
+/** `_rift.warnings` is the engine's output (a `toJson()` result carries it); posting it back is
+ * meaningless, so it is dropped — and `_rift` with it when nothing else is left (issue #170). */
+function withoutReadOnlyWarnings(imp: Imposter): Imposter {
+  if (imp._rift === undefined || !('warnings' in imp._rift)) return imp;
+  const rift = { ...imp._rift };
+  delete rift.warnings;
+  const out: Imposter = { ...imp, _rift: rift };
+  if (Object.keys(rift).length === 0) delete out._rift;
+  return out;
+}
+
+/** Kinds that never trip the `stubWarnings` policy: a predicate-less stub is the DSL's ordinary
+ * default-response shape, and `truncated` is a count of other warnings, not a finding. */
+const NOT_ACTIONABLE_WARNINGS: ReadonlySet<string> = new Set(['catch_all', 'truncated']);
+
+/** What `create()` / `replaceAll()` do with the engine's stub analysis (issue #170). */
+export type StubWarningsPolicy = 'ignore' | 'warn' | 'fail';
 
 function toWireStub(def: AnyStubBuilder | Stub): Stub {
   return def instanceof StubBuilder ? def.build() : def;
@@ -376,6 +404,17 @@ class SpaceHandleImpl implements SpaceHandle {
 
 /** `imposter "users" (port 55123)` / `imposter (port 55123)` — the shared prefix for verification
  * messages, matching the design's rendered `VerificationError` header exactly. */
+/** An error's message plus its `cause` chain, for a one-line report. */
+function describeError(error: unknown): string {
+  let text = String(error);
+  let cause = error instanceof Error ? error.cause : undefined;
+  for (let depth = 0; cause !== undefined && depth < 3; depth++) {
+    text += ` (cause: ${String(cause)})`;
+    cause = cause instanceof Error ? cause.cause : undefined;
+  }
+  return text;
+}
+
 function imposterLabel(name: string | undefined, port: number): string {
   return name !== undefined ? `imposter "${name}" (port ${port})` : `imposter (port ${port})`;
 }
@@ -615,6 +654,10 @@ class ImposterHandleImpl implements ImposterHandle {
     return this.admin.getImposter(this.port, opts);
   }
 
+  async warnings(): Promise<EngineWarning[]> {
+    return this.admin.stubWarnings(this.port);
+  }
+
   /** Idempotent: a second `delete()` (or dispose after an explicit delete) swallows only
    * `ImposterNotFound` — every other failure still propagates. */
   async delete(): Promise<void> {
@@ -742,6 +785,8 @@ async function startInterceptWithBackend(
 interface EngineOptions {
   hostHint?: string;
   onClose?: () => Promise<void>;
+  /** See {@link StubWarningsPolicy}; default `'warn'`. */
+  stubWarnings?: StubWarningsPolicy;
   /** The engine version the transport established at startup (connect's and embedded's `/config`
    * / build-info check). When absent — spawn — an imposter-key feature gate resolves it once from
    * `/config`, and only when an imposter actually carries a gated key. */
@@ -820,8 +865,88 @@ export class Engine implements RiftEngine {
     const wire = toWireImposter(def);
     await this.#assertImposterKeysSupported([wire]);
     const created = await this.adminClient.createImposter(wire);
-    return this.handleFrom(created);
+    const handle = this.handleFrom(created);
+    // Remote and spawn get the analysis in the POST body; the embedded transport's object is the
+    // SDK's own posted JSON, so it asks the engine instead.
+    const read =
+      this.transport === 'embedded'
+        ? () => this.adminClient.stubWarnings(handle.port)
+        : async () => parseImposterWarnings(created, 'POST /imposters');
+    await this.#applyStubWarnings([{ handle, read }]);
+    return handle;
   }
+
+  /**
+   * `'warn'` prints each actionable warning; `'fail'` deletes every imposter just created and throws
+   * {@link StubWarningsError}. A warnings block that cannot be read is reported the same way under
+   * each policy, so `'fail'` never leaves an imposter behind a rejected call.
+   */
+  async #applyStubWarnings(
+    created: ReadonlyArray<{ handle: ImposterHandle; read: () => Promise<EngineWarning[]> }>
+  ): Promise<void> {
+    const policy = this.opts.stubWarnings ?? 'warn';
+    if (policy === 'ignore') return;
+    const reads = await Promise.allSettled(created.map(({ read }) => read()));
+    const offenders: ImposterWarnings[] = [];
+    const unreadable: Array<{ handle: ImposterHandle; error: unknown }> = [];
+    reads.forEach((result, i) => {
+      const handle = (created[i] as { handle: ImposterHandle }).handle;
+      if (result.status === 'rejected') {
+        unreadable.push({ handle, error: result.reason });
+        return;
+      }
+      const warnings = result.value.filter((w) => !NOT_ACTIONABLE_WARNINGS.has(w.warningType));
+      if (warnings.length > 0) {
+        offenders.push({ port: handle.port, ...(handle.name !== undefined ? { name: handle.name } : {}), warnings });
+      }
+    });
+    if (unreadable.length === 0 && offenders.length === 0) return;
+
+    if (policy === 'warn') {
+      for (const { handle, error } of unreadable) {
+        console.warn(
+          `rift: ${imposterLabel(handle.name, handle.port)}: could not read the engine's warnings: ${describeError(error)}`
+        );
+      }
+      for (const { port, name, warnings } of offenders) {
+        for (const w of warnings) console.warn(`rift: ${imposterLabel(name, port)}: ${w.message} [${w.warningType}]`);
+      }
+      return;
+    }
+
+    // 'fail': nothing the call created may outlive it. For replaceAll() that is the whole batch —
+    // the PUT already replaced the previous set, so the engine is left with no imposters.
+    const ports = created.map(({ handle }) => handle.port);
+    const deletions = await Promise.allSettled(ports.map((port) => this.adminClient.deleteImposter(port)));
+    const deleteFailures = deletions.flatMap((d, i) =>
+      d.status === 'rejected' ? [{ port: ports[i] as number, reason: d.reason as unknown }] : []
+    );
+    const leftBehind =
+      deleteFailures.length > 0
+        ? ` Still live, delete failed: ${deleteFailures.map((f) => `port ${f.port} (${describeError(f.reason)})`).join('; ')}.`
+        : '';
+    const causes = [...unreadable.map((u) => u.error), ...deleteFailures.map((f) => f.reason)];
+    const cause = causes.length === 1 ? causes[0] : causes.length > 1 ? new AggregateError(causes) : undefined;
+    const options = cause === undefined ? undefined : { cause };
+    if (unreadable.length > 0) {
+      const which = unreadable.map(({ handle }) => imposterLabel(handle.name, handle.port)).join(', ');
+      throw new RiftError(
+        `stubWarnings: 'fail' could not read the engine's warnings for ${which}: ${describeError(
+          (unreadable[0] as { error: unknown }).error
+        )}. The imposter(s) were deleted again.${leftBehind}`,
+        options
+      );
+    }
+    const lines = offenders.flatMap(({ port, name, warnings }) =>
+      warnings.map((w) => `  ${imposterLabel(name, port)}: ${w.message} [${w.warningType}]`)
+    );
+    throw new StubWarningsError(
+      `stubWarnings: 'fail' — the engine reported warnings, so the imposter(s) were deleted again:\n${lines.join('\n')}${leftBehind}`,
+      offenders,
+      options
+    );
+  }
+
 
   /**
    * The engine version, as the transport recorded it at startup or — spawn, which records none —
@@ -897,7 +1022,12 @@ export class Engine implements RiftEngine {
     const imposters = defs.map(toWireImposter);
     await this.#assertImposterKeysSupported(imposters);
     const result = await this.adminClient.replaceImposters({ imposters });
-    return result.imposters.map((imp) => this.handleFrom(imp));
+    const handles = result.imposters.map((imp) => this.handleFrom(imp));
+    // PUT answers summaries without `_rift`, so each imposter's analysis is one read away.
+    await this.#applyStubWarnings(
+      handles.map((handle) => ({ handle, read: () => this.adminClient.stubWarnings(handle.port) }))
+    );
+    return handles;
   }
 
   async buildInfo(): Promise<BuildInfo> {
@@ -1119,6 +1249,14 @@ export interface ConnectOptions {
   timeoutMs?: number;
   /** Compares the connected engine's `GET /config` version against `minEngineVersion`. Default `'fail'`. */
   versionCheck?: 'fail' | 'warn' | 'off';
+  /** What `create()` / `replaceAll()` do with the engine's stub analysis (`_rift.warnings`, issue
+   * #170): `'warn'` (default) prints one `console.warn` per warning, `'fail'` deletes the imposter(s)
+   * and throws `StubWarningsError` (for `replaceAll()`: the whole batch, leaving no imposters — the
+   * previous set is already gone), `'ignore'` does neither. `catch_all` (a predicate-less stub) and
+   * `truncated` never trigger it; `ImposterHandle.warnings()` returns every kind under any policy.
+   * `replaceAll()`, and `create()` on the embedded transport, read each imposter's warnings with one
+   * extra call. */
+  stubWarnings?: StubWarningsPolicy;
 }
 
 async function connectEngine(url: string, opts: ConnectOptions = {}): Promise<Engine> {
@@ -1142,7 +1280,12 @@ async function connectEngine(url: string, opts: ConnectOptions = {}): Promise<En
     }
   }
 
-  return new Engine(client, 'remote', { hostHint: new URL(normalized).hostname, engineVersion: found, versionCheck });
+  return new Engine(client, 'remote', {
+    hostHint: new URL(normalized).hostname,
+    engineVersion: found,
+    versionCheck,
+    stubWarnings: opts.stubWarnings,
+  });
 }
 
 async function spawnEngine(opts: SpawnOptions = {}): Promise<Engine> {
@@ -1150,6 +1293,7 @@ async function spawnEngine(opts: SpawnOptions = {}): Promise<Engine> {
   const host = new URL(spawned.url).hostname;
   return new Engine(spawned.client, 'spawn', {
     hostHint: host,
+    stubWarnings: opts.stubWarnings,
     onClose: () => spawned.close(),
     interceptSpawn: spawned.interceptPort !== undefined ? { host, port: spawned.interceptPort } : undefined,
   });
@@ -1172,6 +1316,14 @@ export interface EmbeddedOptions {
   download?: false;
   /** Compares the loaded cdylib's reported version against `minEngineVersion`. Default `'fail'`. */
   versionCheck?: 'fail' | 'warn' | 'off';
+  /** What `create()` / `replaceAll()` do with the engine's stub analysis (`_rift.warnings`, issue
+   * #170): `'warn'` (default) prints one `console.warn` per warning, `'fail'` deletes the imposter(s)
+   * and throws `StubWarningsError` (for `replaceAll()`: the whole batch, leaving no imposters — the
+   * previous set is already gone), `'ignore'` does neither. `catch_all` (a predicate-less stub) and
+   * `truncated` never trigger it; `ImposterHandle.warnings()` returns every kind under any policy.
+   * `replaceAll()`, and `create()` on the embedded transport, read each imposter's warnings with one
+   * extra call. */
+  stubWarnings?: StubWarningsPolicy;
   /** Build-variant features (e.g. `'javascript'`) the loaded cdylib must report; missing ones fail
    * preflight regardless of `versionCheck` — this is a build-variant property, not a version gate. */
   requireFeatures?: string[];

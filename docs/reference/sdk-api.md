@@ -127,6 +127,7 @@ interface ConnectOptions {
   headers?: Record<string, string>;
   timeoutMs?: number;                 // per-request; default 30_000
   versionCheck?: 'fail' | 'warn' | 'off';  // default 'fail'; compares GET /config to minEngineVersion
+  stubWarnings?: 'ignore' | 'warn' | 'fail';  // default 'warn'; see "Engine warnings" below
 }
 ```
 
@@ -198,6 +199,7 @@ interface ImposterHandle extends AsyncDisposable {
       // the read shape differs from what the DSL posts (engine >= 0.18.0): a response's behaviors come
       // back as an ordered `behaviors` array plus a response-level `repeat`, not `_behaviors`; both
       // are typed on wire.StubResponse and round-trip through fromJson unchanged
+  warnings(): Promise<wire.EngineWarning[]>;  // the engine's current stub analysis, every kind; [] if none
   delete(): Promise<void>;                 // [Symbol.asyncDispose] delegates here (idempotent)
 }
 ```
@@ -273,12 +275,35 @@ wire model + DSL                      — pure data
 `AdminApi` implementations. This replaced the pre-M7 split where spawn returned `{url, port,
 client}` and remote returned a bare client (#21).
 
+**Engine warnings** (issue #170). The engine analyses every imposter it loads and reports what it
+found as `_rift.warnings`: a key it parses and does not act on (`config_key_ignored`, engine ≥ 0.18.0
+— `recordMatches`, `_rift.metrics`, `_rift.proxy`), `_rift.stateOps` on a response that never runs
+them (`state_ops_never_runs`, ≥ 0.18.0), and duplicate, shadowed or catch-all stubs
+(`duplicate_id`, `exact_duplicate`, `potentially_shadowed`, `catch_all`, `catch_all_not_last`, with a
+`truncated` summary past the engine's cap). `handle.warnings()` returns them fresh — the engine
+recomputes them on every stub change. `create()` and `replaceAll()` also act on them, per the
+`stubWarnings` option of `connect` / `spawn` / `embedded`:
+
+| `stubWarnings` | Effect |
+|---|---|
+| `'warn'` (default) | one `console.warn` per warning: `rift: imposter "orders" (port 4545): <message> [<warningType>]` |
+| `'fail'` | the imposter(s) just created are deleted again and `StubWarningsError` is thrown; `.imposters` lists each offender's port, name and warnings. For `replaceAll()` that is the whole batch — the `PUT` already replaced the previous set, which is not restored, so the engine is left with no imposters |
+| `'ignore'` | nothing; no extra call is made |
+
+`catch_all` and `truncated` never trigger the policy: a predicate-less stub is the DSL's ordinary
+default-response shape. `create()` over connect/spawn reads the warnings from the `POST /imposters`
+reply; `replaceAll()` (whose `PUT` reply carries none) and `create()` over the embedded transport
+(which reads them through `rift_stub_warnings`) make one extra call per imposter. A warnings block
+the SDK cannot read is reported under `'warn'` and fails the call under `'fail'` — never read as "no
+warnings". `_rift.warnings` is read-only: a `toJson()` result posted back has it stripped.
+
 ### 3.5 `AdminApi` (escape hatch, total wire-level surface)
 
 `RemoteClient` covers the full admin route table, and `AdminApi` is the interface every
 transport implements: imposter CRUD (`?replayable`/`removeProxies`), stub CRUD by index and by id,
 `savedRequests` get/delete with `match=` filters, `savedProxyResponses` delete, enable/disable,
-scenarios get/put/reset, spaces, flow-state KV, `config`/`logs`/`metrics`, `reload`. Exact
+scenarios get/put/reset, spaces, flow-state KV, `config`/`logs`/`metrics`, `reload`, and
+`stubWarnings(port)` (the engine's `_rift.warnings` for one imposter, `[]` when absent). Exact
 signatures are in issue #15 (client API).
 
 ## 4. Error model
@@ -296,6 +321,7 @@ class UnsupportedPredicateError extends RiftError// client-side verify hit xpath
 class EngineVersionError extends RiftError       // preflight: engine < minEngineVersion; .found .required
 class NativeLibraryError extends RiftError       // cdylib resolution/ABI failure; .path? .classifier?
 class InterceptUnavailable extends RiftError     // intercept not started/startable on this transport
+class StubWarningsError extends RiftError        // stubWarnings: 'fail' tripped; .imposters [{ port, name?, warnings }]
 ```
 
 All SDK-thrown errors are `RiftError` subclasses (the compat `create()` keeps its historical plain
@@ -888,6 +914,7 @@ interface SpawnOptions {
                                                   // it). An inherited RUST_LOG supersedes --loglevel
   version?: string; binaryPath?: string; env?: Record<string, string>; mirror?: string;
   startupTimeoutMs?: number; shutdownTimeoutMs?: number;
+  stubWarnings?: 'ignore' | 'warn' | 'fail';      // default 'warn'; see §3.3 "Engine warnings"
   allowInjection?: boolean;                       // --allow-injection
   apiKey?: string;                                // --api-key (also used by the client); blank
                                                   // throws InvalidDefinition before the binary
@@ -992,6 +1019,7 @@ interface EmbeddedOptions {
   cacheDir?: string;
   download?: boolean;               // default true; false = resolve offline or throw
   versionCheck?: 'fail' | 'warn' | 'off';
+  stubWarnings?: 'ignore' | 'warn' | 'fail';  // default 'warn'; see §3.3 "Engine warnings"
   requireFeatures?: string[];
   upstreamTrust?: UpstreamTrust;    // rift_serve_admin upstreamCaFile|upstreamCaPem|upstreamTlsSkipVerify;
                                     // gated on buildInfo().serveOptions; starts the admin plane

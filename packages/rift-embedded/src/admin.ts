@@ -14,6 +14,7 @@
 
 import { randomUUID } from 'crypto';
 import type {
+  EngineWarning,
   Imposter,
   ImpostersConfig,
   Predicate,
@@ -24,7 +25,7 @@ import type { AdminApi, BuildInfo, UpstreamTrust } from '@rift-vs/rift/internal'
 import { upstreamTrustServeOptions } from '@rift-vs/rift/internal';
 import type { FlowScopedOptions } from '@rift-vs/rift/internal';
 import { ImposterNotFound, InvalidDefinition, RiftError } from '@rift-vs/rift';
-import { toRecordedRequest, stringifyJsonSafe } from '@rift-vs/rift/internal';
+import { toRecordedRequest, stringifyJsonSafe, parseEngineWarnings } from '@rift-vs/rift/internal';
 import { evalPredicates } from '@rift-vs/rift/internal';
 import { AdminBridge } from './bridge.js';
 
@@ -39,6 +40,8 @@ export interface NativeEngineLike {
   deleteAll(): Promise<number>;
   applyConfig(json: string): Promise<string>;
   recorded(port: number): Promise<string>;
+  /** `rift_stub_warnings`: the engine's stub analysis for `port` as a JSON array (issue #170). */
+  stubWarnings(port: number): Promise<string>;
   flowStateGet(port: number, flowId: string, key: string): Promise<{ found: boolean; value?: unknown }>;
   flowStatePut(port: number, flowId: string, key: string, valueJson: string): Promise<number>;
   flowStateDelete(port: number, flowId: string, key: string): Promise<number>;
@@ -170,6 +173,20 @@ export class EmbeddedAdmin implements AdminApi {
     await this.#native.deleteImposter(port);
     this.#registry.delete(port);
     return imp;
+  }
+
+  /** Always FFI: the registry holds the SDK's posted JSON, which never carries the engine's
+   * analysis. `rift_stub_warnings` rejects an unknown port, like the other per-port calls. */
+  async stubWarnings(port: number): Promise<EngineWarning[]> {
+    this.#requireImposter(port);
+    const raw = await this.#native.stubWarnings(port);
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (cause) {
+      throw new RiftError(`rift_stub_warnings(${port}) returned invalid JSON`, { cause });
+    }
+    return parseEngineWarnings(parsed, `rift_stub_warnings(${port})`);
   }
 
   async deleteAllImposters(): Promise<void> {

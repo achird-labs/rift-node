@@ -9,7 +9,7 @@ import { Engine, type AdminApi } from '../../src/engine.js';
 import { imposter, onGet } from '../../src/dsl/index.js';
 import { ImposterNotFound, RiftError } from '../../src/errors.js';
 import type { RecordedRequest } from '../../src/verify/index.js';
-import type { Imposter, ImpostersConfig, Stub, RecordedRequest as WireRecordedRequest } from '../../src/model/index.js';
+import type { EngineWarning, Imposter, ImpostersConfig, Stub, RecordedRequest as WireRecordedRequest } from '../../src/model/index.js';
 
 /** Same shape as `verify.test.ts`'s `FakeAdminApi`, plus a scripted `getSavedRequests`: a queue of
  * raw-array snapshots (successive calls advance through the queue, holding on the last entry), and
@@ -43,6 +43,9 @@ class FakeAdminApi implements AdminApi {
     const imp = await this.getImposter(port);
     this.imposters.delete(port);
     return imp;
+  }
+  async stubWarnings(): Promise<EngineWarning[]> {
+    return [];
   }
   async deleteAllImposters(): Promise<void> {
     this.imposters.clear();
