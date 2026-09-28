@@ -5,6 +5,19 @@ All notable changes to `@rift-vs/rift` are documented here. This project adheres
 
 ## Unreleased
 
+## 0.16.0 — 2026-09-28
+
+Everything since 0.15.0. The 0.15.1 and 0.15.2 patches were cut automatically after engine bumps
+and carried no changelog section of their own, so the entries below include what they shipped.
+
+**Upgrade notes.**
+
+- `create()` / `replaceAll()` now print the engine's stub-analysis warnings by default
+  (`stubWarnings: 'warn'`). Pass `stubWarnings: 'ignore'` to keep the old silence, or `'fail'` to
+  make them errors.
+- A custom `AdminApi` implementation must add `stubWarnings(port)`, and a custom
+  `NativeEngineLike` (embedded) must add `stubWarnings(port)`.
+
 ### Added
 
 - **`RiftServer` declares its events: `on` / `once` / `off` typed by the new `RiftServerEvents`**
