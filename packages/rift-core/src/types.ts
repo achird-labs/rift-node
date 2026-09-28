@@ -59,6 +59,23 @@ export interface CreateOptions {
 }
 
 /**
+ * Events a compat {@link RiftServer} re-emits from the engine child process once `create()` has
+ * resolved. Startup failures reject `create()` instead.
+ */
+export interface RiftServerEvents {
+  /** The engine process errored after startup. Node's rule for `'error'` applies: emitted with no
+   * listener it throws `ERR_UNHANDLED_ERROR` and takes the host down, so subscribe when a
+   * post-startup engine failure must not be fatal. */
+  error: [error: Error];
+  /** The engine process exited: its exit code, or the signal that ended it. */
+  exit: [code: number | null, signal: NodeJS.Signals | null];
+  /** A chunk of the engine's stdout. */
+  stdout: [chunk: string];
+  /** A chunk of the engine's stderr. */
+  stderr: [chunk: string];
+}
+
+/**
  * Represents a running Rift server instance
  */
 export interface RiftServer {
@@ -68,6 +85,12 @@ export interface RiftServer {
   readonly host: string;
   /** Gracefully close the server */
   close(): Promise<void>;
+  /** Subscribe to an engine process event; see {@link RiftServerEvents}. */
+  on<E extends keyof RiftServerEvents>(event: E, listener: (...args: RiftServerEvents[E]) => void): this;
+  /** Subscribe for the next occurrence only. */
+  once<E extends keyof RiftServerEvents>(event: E, listener: (...args: RiftServerEvents[E]) => void): this;
+  /** Remove a listener added with `on()` / `once()`. */
+  off<E extends keyof RiftServerEvents>(event: E, listener: (...args: RiftServerEvents[E]) => void): this;
 }
 
 /**

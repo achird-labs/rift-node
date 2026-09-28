@@ -71,7 +71,7 @@ export { findBinary, downloadBinary, getBinaryVersion } from './binary.js';
 
 // Mountebank-compatible `create()` — permanent drop-in surface. Also at `@rift-vs/rift/compat`.
 export { create } from './compat/index.js';
-export type { CreateOptions, RedisOptions, RiftServer } from './types.js';
+export type { CreateOptions, RedisOptions, RiftServer, RiftServerEvents } from './types.js';
 
 import { create } from './compat/index.js';
 export default { create };

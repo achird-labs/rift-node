@@ -1097,9 +1097,20 @@ test('looks up user', async () => {
 accepted-but-ignored `redis`/`impostersRepository`, any-HTTP-response readiness poll, EventEmitter
 events, SIGTERM→SIGKILL close). Internals migrated to `fetch` + `spawn/resolve.ts` in #25: axios
 and the duplicate `binary.ts` stack retired; `findBinary`/`downloadBinary`/`getBinaryVersion`
-remain as deprecated delegating wrappers. Known follow-up: `create()`'s child-process `'error'`
-listener throws inside the emitter, crashing the host on spawn failure instead of rejecting —
-tracked as **#28**.
+remain as deprecated delegating wrappers. A spawn failure rejects `create()` (#28).
+
+The returned `RiftServer` is an emitter for the engine child process, typed by `RiftServerEvents`
+(#176): `server.on(event, listener)`, `once` and `off` accept only these events and listener shapes.
+
+| Event | Listener arguments | When |
+|---|---|---|
+| `'error'` | `(error: Error)` | the engine process errors after startup |
+| `'exit'` | `(code: number \| null, signal: NodeJS.Signals \| null)` | the engine process exits |
+| `'stdout'` | `(chunk: string)` | the engine writes to stdout |
+| `'stderr'` | `(chunk: string)` | the engine writes to stderr |
+
+Node's rule for `'error'` applies: emitted with no listener it throws `ERR_UNHANDLED_ERROR` and
+takes the host down. Subscribe to `'error'` when a post-startup engine failure must not be fatal.
 
 ## 11. Conformance
 
