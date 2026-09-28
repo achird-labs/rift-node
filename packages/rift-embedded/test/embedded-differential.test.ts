@@ -196,8 +196,7 @@ class FakeRemoteAdminServer {
 
 function mockRemoteFetch(server: FakeRemoteAdminServer): void {
   const fn = jest.fn(async (url: unknown, init?: RequestInit) => server.respond(String(url), init ?? {}));
-  // @ts-expect-error override the global for this test
-  globalThis.fetch = fn;
+  globalThis.fetch = fn as unknown as typeof fetch;
 }
 
 // -------------------------------------------------------------------------------------------

@@ -669,10 +669,10 @@ describe('spawn — MB_APIKEY env contract (issue #103)', () => {
             duringResolve?.();
             return process.execPath;
           },
-          spawn: (_bin, spawnArgs) => {
-            args = spawnArgs as string[];
+          spawn: ((_bin: string, spawnArgs: readonly string[]) => {
+            args = [...spawnArgs];
             return fakeChild();
-          },
+          }) as unknown as SpawnDeps['spawn'],
         }
       );
       return { engine, args };

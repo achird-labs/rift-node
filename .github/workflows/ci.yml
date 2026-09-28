@@ -44,6 +44,11 @@ jobs:
       - name: Build
         run: npm run build
 
+      # After Build: the embedded package's tests resolve @rift-vs/rift through core's dist (#160).
+      # ts-jest transpiles tests in isolation, so this is the only step that type-checks test/**.
+      - name: Typecheck tests
+        run: npm run typecheck:tests
+
       - name: Test
         run: npm test
 

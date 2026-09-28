@@ -393,7 +393,7 @@ describe('issue #101 — serve() normalizes the response into the engine ServeSt
       [ok('x').decorate('(r) => r'), '_behaviors.decorate', 'decorate()'],
       [ok('x').shellTransform('cat'), '_behaviors.shellTransform', 'shellTransform()'],
       [ok('x').copy({ from: 'path', into: '${p}', using: { method: 'regex', selector: '.' } }), '_behaviors.copy', 'copy()'],
-      [ok('x').lookup({ key: { from: 'q', using: { method: 'regex', selector: '.' } }, fromDataSource: { csv: { path: 'p', keyColumn: 'k' } }, into: '${x}' }), '_behaviors.lookup', 'lookup()'],
+      [ok('x').lookup({ key: { from: 'path', using: { method: 'regex', selector: '.' } }, fromDataSource: { csv: { path: 'p', keyColumn: 'k' } }, into: '${x}' }), '_behaviors.lookup', 'lookup()'],
     ];
     for (const [builder, wireKey, method] of cases) {
       const message = await serveError(builder);
@@ -411,8 +411,8 @@ describe('issue #101 — serve() normalizes the response into the engine ServeSt
     const { Fault } = await import('../../src/dsl/fault.js');
     expect(await serveError(ok('x').templated())).toContain('_rift.templated');
     expect(await serveError(ok('x').templated())).toContain('templated()');
-    expect(await serveError(ok('x').script({ code: 'return 1' }))).toContain('_rift.script');
-    expect(await serveError(ok('x').script({ code: 'return 1' }))).toContain('script()');
+    expect(await serveError(ok('x').script({ engine: 'js', code: 'return 1' }))).toContain('_rift.script');
+    expect(await serveError(ok('x').script({ engine: 'js', code: 'return 1' }))).toContain('script()');
     expect(await serveError(ok('x').incrementState('hits'))).toContain('_rift.stateOps');
     expect(await serveError(ok('x').incrementState('hits'))).toContain('stateOps()');
     // The fault family carries a method annotation too — that is the whole "name the caller's own
@@ -421,8 +421,8 @@ describe('issue #101 — serve() normalizes the response into the engine ServeSt
     expect(await serveError(ok('x').withFault(Fault.latency(50)))).toContain('withFault(');
     expect(await serveError(ok('x').withFault(Fault.error({ status: 500 })))).toContain('_rift.fault.error');
     expect(await serveError(ok('x').withFault(Fault.error({ status: 500 })))).toContain('withFault(');
-    expect(await serveError(ok('x').withFault(Fault.tcp('reset')))).toContain('_rift.fault.tcp');
-    expect(await serveError(ok('x').withFault(Fault.tcp('reset')))).toContain('withFault(');
+    expect(await serveError(ok('x').withFault(Fault.tcp('CONNECTION_RESET_BY_PEER')))).toContain('_rift.fault.tcp');
+    expect(await serveError(ok('x').withFault(Fault.tcp('CONNECTION_RESET_BY_PEER')))).toContain('withFault(');
     // The legacy fault() spelling lands in the same _rift.fault.tcp slot.
     expect(await serveError(ok('x').fault('reset'))).toContain('_rift.fault.tcp');
   });
@@ -430,7 +430,7 @@ describe('issue #101 — serve() normalizes the response into the engine ServeSt
   it('names EVERY offender in one error rather than the first one found (issue #131)', async () => {
     // First-wins would send a caller round the loop once per construct, each time reporting a rule
     // they had already been told was unusable.
-    const message = await serveError(ok('x').latency(10).repeat(2).templated().script({ code: 'return 1' }));
+    const message = await serveError(ok('x').latency(10).repeat(2).templated().script({ engine: 'js', code: 'return 1' }));
     for (const named of ['_behaviors.wait', '_behaviors.repeat', '_rift.templated', '_rift.script']) {
       expect(message).toContain(named);
     }
@@ -1015,8 +1015,7 @@ describe('issue #11 — embedded transport: start, memoize, "already started"', 
 describe('issue #11 — spawn transport availability + attach', () => {
   function mockFetch(response: Response): jest.Mock {
     const fn = jest.fn(async () => response);
-    // @ts-expect-error override global for the test
-    globalThis.fetch = fn;
+    globalThis.fetch = fn as unknown as typeof fetch;
     return fn as unknown as jest.Mock;
   }
 
@@ -1075,8 +1074,7 @@ describe('issue #11 — spawn transport availability + attach', () => {
 describe('issue #11 — remote transport: attach-only probe', () => {
   function mockFetch(response: Response): jest.Mock {
     const fn = jest.fn(async () => response);
-    // @ts-expect-error override global for the test
-    globalThis.fetch = fn;
+    globalThis.fetch = fn as unknown as typeof fetch;
     return fn as unknown as jest.Mock;
   }
 
@@ -1146,8 +1144,7 @@ describe('issue #11 — RemoteClient intercept HTTP routes (mocked fetch)', () =
 
   function mockFetch(response: Response): jest.Mock {
     const fn = jest.fn(async () => response);
-    // @ts-expect-error override global for the test
-    globalThis.fetch = fn;
+    globalThis.fetch = fn as unknown as typeof fetch;
     return fn as unknown as jest.Mock;
   }
 

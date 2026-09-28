@@ -45,6 +45,7 @@
     "prepublishOnly": "npm run build",
     "lint": "eslint src test examples scripts --ext .ts,.mjs",
     "typecheck": "tsc --noEmit",
+    "typecheck:tests": "tsc -p tsconfig.test.json --noEmit",
     "typecheck:examples": "tsc -p tsconfig.examples.json --noEmit",
     "docs:check": "node scripts/check-docs-embeds.mjs"
   },

@@ -19,12 +19,22 @@ import {
   WireValidationError,
   type Imposter,
   type ImpostersConfig,
+  type ServeStub,
 } from '../../src/model/index.js';
 import { makeJsonSafeReplacer, stringifyJsonSafe } from '../../src/model/serialize.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const fixturesDir = path.join(here, '..', 'fixtures', 'mb');
 const fixtureFiles = fs.readdirSync(fixturesDir).filter((f) => f.endsWith('.json'));
+
+// Type-level pins (issue #160): `npm run typecheck:tests` compiles these; jest alone would not,
+// because ts-jest transpiles each test in isolation and reports no type errors.
+describe('model types — compile-time pins (issue #160)', () => {
+  it('ServeStub.headers admits a multi-value header (issue #144)', () => {
+    const headers: ServeStub['headers'] = { 'Set-Cookie': ['a=1', 'b=2'] };
+    expect(headers).toEqual({ 'Set-Cookie': ['a=1', 'b=2'] });
+  });
+});
 
 describe('wire model — round-trip over rift example fixtures', () => {
   it('found the fixtures', () => {

@@ -68,7 +68,7 @@ function fakeFs() {
     unlock,
     sleep,
   };
-  return { files, tryLock, unlock, sleep, ...opts };
+  return { files, ...opts };
 }
 
 function goodManifest(data: Buffer, overrides: Partial<NativeManifest> = {}): NativeManifest {
@@ -279,7 +279,7 @@ describe('natives — download flow (step 4)', () => {
       unlock: fs.unlock,
       fetchManifest,
       fetchArtifact,
-    }).catch((e: unknown) => e as Error);
+    }).then(() => new Error('resolveCdylib resolved; expected a rejection'), (e: unknown) => e as Error);
     expect(err).toBeInstanceOf(NativeLibraryError); // type + message both asserted
     expect(err.message).toMatch(/checksum mismatch/i);
 
@@ -358,7 +358,7 @@ describe('natives — air-gap (step 3)', () => {
         env: { ...fs.env, [envKey]: '1' },
         fileExists: fs.fileExists,
         readFile: fs.readFile,
-      }).catch((e: unknown) => e as Error);
+      }).then(() => new Error('resolveCdylib resolved; expected a rejection'), (e: unknown) => e as Error);
       expect(err.message).toContain('releases/download');
       expect(err.message).toContain(DEFAULT_CDYLIB_VERSION);
       expect(err.message).toContain(destPathFor());

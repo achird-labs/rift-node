@@ -17,6 +17,7 @@ independently.
 npm ci                 # install exact, locked dependencies
 npm run build          # tsc -> dist/ (emits .d.ts)
 npm run typecheck      # tsc --noEmit
+npm run typecheck:tests  # tsc over src + test/** (after build; jest itself reports no type errors)
 npm run lint           # eslint src test
 npm test               # jest (unit + integration)
 npm run test:unit      # unit tests only (no rift binary needed)

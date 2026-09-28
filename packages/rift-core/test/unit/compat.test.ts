@@ -21,7 +21,7 @@ describe('issue #25 — compat waitForServer (fetch-based poll)', () => {
   });
 
   it('dials an IPv6 host with brackets (issue #143)', async () => {
-    const fetchMock = jest.fn().mockResolvedValue({ status: 200 } as Response);
+    const fetchMock = jest.fn<typeof fetch>().mockResolvedValue({ status: 200 } as Response);
     globalThis.fetch = fetchMock as unknown as typeof fetch;
 
     await expect(waitForServer('::1', 12345, 5000)).resolves.toBeUndefined();
@@ -29,7 +29,7 @@ describe('issue #25 — compat waitForServer (fetch-based poll)', () => {
   });
 
   it('AC2b: an error-status HTTP response counts as ready (resolves)', async () => {
-    const fetchMock = jest.fn().mockResolvedValue({ status: 503 } as Response);
+    const fetchMock = jest.fn<typeof fetch>().mockResolvedValue({ status: 503 } as Response);
     globalThis.fetch = fetchMock as unknown as typeof fetch;
 
     await expect(waitForServer('localhost', 12345, 5000)).resolves.toBeUndefined();
@@ -38,7 +38,7 @@ describe('issue #25 — compat waitForServer (fetch-based poll)', () => {
 
   it('AC2b: retries on transport rejection, then resolves once a response arrives', async () => {
     const fetchMock = jest
-      .fn()
+      .fn<typeof fetch>()
       .mockRejectedValueOnce(new Error('ECONNREFUSED'))
       .mockRejectedValueOnce(new Error('ECONNREFUSED'))
       .mockResolvedValue({ status: 200 } as Response);
@@ -49,7 +49,7 @@ describe('issue #25 — compat waitForServer (fetch-based poll)', () => {
   });
 
   it('AC2b: rejects when the server never responds within the timeout', async () => {
-    const fetchMock = jest.fn().mockRejectedValue(new Error('ECONNREFUSED'));
+    const fetchMock = jest.fn<typeof fetch>().mockRejectedValue(new Error('ECONNREFUSED'));
     globalThis.fetch = fetchMock as unknown as typeof fetch;
 
     await expect(waitForServer('localhost', 12345, 250)).rejects.toThrow(/did not start/);
@@ -84,13 +84,13 @@ describe('issue #28 — create() spawn-failure and child-error delivery', () => 
 
   function serverNeverUp(): void {
     globalThis.fetch = jest
-      .fn()
+      .fn<typeof fetch>()
       .mockRejectedValue(new Error('ECONNREFUSED')) as unknown as typeof fetch;
   }
 
   function serverUpImmediately(): void {
     globalThis.fetch = jest
-      .fn()
+      .fn<typeof fetch>()
       .mockResolvedValue({ status: 200 } as Response) as unknown as typeof fetch;
   }
 
@@ -111,7 +111,8 @@ describe('issue #28 — create() spawn-failure and child-error delivery', () => 
 
     const server = await create({ port: 45701 }, deps);
     const seen: Error[] = [];
-    server.on('error', (err: Error) => seen.push(err));
+    // RiftServer does not declare the emitter surface the compat server has at runtime.
+    (server as unknown as EventEmitter).on('error', (err: Error) => seen.push(err));
 
     child.emit('error', new Error('engine hiccup'));
 
@@ -189,7 +190,7 @@ describe('issue #77 — create() maps datadir to --datadir (Mountebank persisten
 
   function serverUpImmediately(): void {
     globalThis.fetch = jest
-      .fn()
+      .fn<typeof fetch>()
       .mockResolvedValue({ status: 200 } as Response) as unknown as typeof fetch;
   }
 
@@ -261,7 +262,7 @@ describe('issue #76 — create() fails loud on options it cannot honor (no silen
   it('leaves a normal create() (no rejected options) untouched — it proceeds to spawn', async () => {
     const realFetch = globalThis.fetch;
     globalThis.fetch = jest
-      .fn()
+      .fn<typeof fetch>()
       .mockResolvedValue({ status: 200 } as Response) as unknown as typeof fetch;
     const child = Object.assign(new EventEmitter(), {
       stdout: new EventEmitter(),
@@ -332,7 +333,7 @@ describe('issue #108 — create() guards the ambient MB_APIKEY it hands the chil
 
     const realFetch = globalThis.fetch;
     globalThis.fetch = jest
-      .fn()
+      .fn<typeof fetch>()
       .mockResolvedValue({ status: 200 } as Response) as unknown as typeof fetch;
     const child = Object.assign(new EventEmitter(), {
       stdout: new EventEmitter(),
@@ -350,7 +351,7 @@ describe('issue #108 — create() guards the ambient MB_APIKEY it hands the chil
       expect(spawn).toHaveBeenCalledTimes(1);
       // A real inherited key is legitimate engine config — create() must not strip it or refuse it,
       // and it passes no `env`, so the child keeps inheriting it.
-      expect(spawn.mock.calls[0][2]).not.toHaveProperty('env');
+      expect((spawn.mock.calls[0] as unknown[])[2]).not.toHaveProperty('env');
     } finally {
       globalThis.fetch = realFetch;
     }
@@ -413,7 +414,7 @@ describe('issue #116 — create() re-checks MB_APIKEY after binary resolution', 
     process.env.MB_APIKEY = 'real-key';
     const realFetch = globalThis.fetch;
     globalThis.fetch = jest
-      .fn()
+      .fn<typeof fetch>()
       .mockResolvedValue({ status: 200 } as Response) as unknown as typeof fetch;
     const child = Object.assign(new EventEmitter(), {
       stdout: new EventEmitter(),
@@ -495,7 +496,7 @@ describe('issue #115 — create() guards the ambient RIFT_INTERCEPT_AUTH', () =>
     delete process.env.RIFT_INTERCEPT_AUTH;
     const realFetch = globalThis.fetch;
     globalThis.fetch = jest
-      .fn()
+      .fn<typeof fetch>()
       .mockResolvedValue({ status: 200 } as Response) as unknown as typeof fetch;
     const child = Object.assign(new EventEmitter(), {
       stdout: new EventEmitter(),

@@ -415,12 +415,12 @@ describe('DSL — _rift.stateOps builder (issue #149)', () => {
     // Engine 0.18.0 runs stateOps only after an `is` response is rendered; on every other shape it
     // never runs them and reports it only as an analysis warning. The legacy tcp fault string is the
     // shape a list-based check would miss — it is a `_rift`-only response with no `is`.
-    for (const shape of [() => proxyTo('http://u').incrementState('h'), () => inject('function(){}').incrementState('h'), () => fault('CONNECTION_RESET_BY_PEER').incrementState('h'), () => fault('ECONNRESET').incrementState('h'), () => script({ code: 'return 1' }).incrementState('h')]) {
+    for (const shape of [() => proxyTo('http://u').incrementState('h'), () => inject('function(){}').incrementState('h'), () => fault('CONNECTION_RESET_BY_PEER').incrementState('h'), () => fault('ECONNRESET').incrementState('h'), () => script({ engine: 'js', code: 'return 1' }).incrementState('h')]) {
       expect(() => shape().build()).toThrow(InvalidDefinition);
       expect(() => shape().build()).toThrow(/stateOps/);
     }
     // Order of the calls does not matter — the check runs at build().
-    expect(() => ok().incrementState('h').script({ code: 'return 1' }).build()).toThrow(InvalidDefinition);
+    expect(() => ok().incrementState('h').script({ engine: 'js', code: 'return 1' }).build()).toThrow(InvalidDefinition);
   });
 
   it('raw() stays the unchecked escape hatch for a future op shape — and replaces the whole _rift block', () => {

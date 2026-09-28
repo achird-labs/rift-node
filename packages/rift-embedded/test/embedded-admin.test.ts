@@ -875,7 +875,7 @@ describe('issue #112 — embedded FFI payloads are JSON-safe', () => {
     try {
       const created = await engine.admin.createImposter({ port: 0, protocol: 'http', stubs: [] });
       await expect(
-        engine.admin.setFlowState(created.port, 'flow', 'key', Infinity)
+        engine.admin.setFlowState(created.port as number, 'flow', 'key', Infinity)
       ).rejects.toThrow(WireValidationError);
       expect(native.calls.filter((c) => c.fn === 'flowStatePut')).toEqual([]);
     } finally {
@@ -894,7 +894,7 @@ describe('issue #112 — embedded FFI payloads are JSON-safe', () => {
     ['addSpaceStub', (a, port) => a.addSpaceStub(port, 'flow', badStub)],
   ];
 
-  it.each(stubRoutes)('%s refuses a non-finite number and calls no native fn', async (name, call) => {
+  it.each(stubRoutes)('%s refuses a non-finite number and calls no native fn', async (_name, call) => {
     const { engine, native } = await engineWithFake();
     try {
       const created = await engine.admin.createImposter({
@@ -903,7 +903,7 @@ describe('issue #112 — embedded FFI payloads are JSON-safe', () => {
         stubs: [{ responses: [{ is: { statusCode: 200 } }] }],
       });
       const before = native.calls.length;
-      await expect(call(engine.admin, created.port)).rejects.toThrow(WireValidationError);
+      await expect(call(engine.admin, created.port as number)).rejects.toThrow(WireValidationError);
       expect(native.calls.slice(before)).toEqual([]);
     } finally {
       await engine.close();
@@ -951,7 +951,7 @@ describe('issue #112 — embedded FFI payloads are JSON-safe', () => {
     try {
       const created = await engine.admin.createImposter({ port: 0, protocol: 'http', stubs: [] });
       await expect(
-        engine.admin.setFlowState(created.port, 'flow', 'key', undefined)
+        engine.admin.setFlowState(created.port as number, 'flow', 'key', undefined)
       ).rejects.toThrow(WireValidationError);
       expect(native.calls.filter((c) => c.fn === 'flowStatePut')).toEqual([]);
     } finally {
