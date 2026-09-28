@@ -16,7 +16,7 @@ const pkg = JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8'));
 
 describe('issue #25 — exports map resolves to built output (AC4)', () => {
   beforeAll(() => {
-    execSync('npm run build', { cwd: repoRoot, stdio: 'pipe', shell: true });
+    execSync('npm run build', { cwd: repoRoot, stdio: 'pipe' });
   }, 120_000);
 
   it('every exports subpath points to an emitted .js and .d.ts under dist/', () => {
@@ -35,7 +35,7 @@ describe('issue #25 — exports map resolves to built output (AC4)', () => {
     const script = specifiers.map((s) => `await import(${JSON.stringify(s)});`).join('\n');
     // Runs in a child node process with cwd at the package root so Node self-references `pkg.name`
     // via the exports map. Throws (non-zero exit) if any subpath fails to resolve or load.
-    execSync(`node --input-type=module -e "${script.replace(/"/g, '\\"')}"`, { cwd: repoRoot, stdio: 'pipe', shell: true });
+    execSync(`node --input-type=module -e "${script.replace(/"/g, '\\"')}"`, { cwd: repoRoot, stdio: 'pipe' });
   }, 30_000);
 
   it('./testkit/vitest resolves through the exports map to dist, failing only on the missing `vitest` peer', () => {
@@ -45,7 +45,6 @@ describe('issue #25 — exports map resolves to built output (AC4)', () => {
       execSync(`node --input-type=module -e "${script.replace(/"/g, '\\"')}"`, {
         cwd: repoRoot,
         stdio: 'pipe',
-        shell: true,
       })
     ).toThrow(/Cannot find package 'vitest'/);
   }, 30_000);

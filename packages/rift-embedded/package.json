@@ -19,7 +19,8 @@
     "prepublishOnly": "npm run build",
     "test": "node --experimental-vm-modules ../../node_modules/jest/bin/jest.js",
     "lint": "eslint src test --ext .ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "typecheck:tests": "tsc -p tsconfig.test.json --noEmit"
   },
   "dependencies": {
     "koffi": "^2.9.0"

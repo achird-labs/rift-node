@@ -13,8 +13,7 @@ function ok(body: unknown, status = 200): Response {
 
 function mockFetch(...responses: Response[]): jest.Mock {
   const fn = jest.fn(async () => responses.shift() ?? ok({}));
-  // @ts-expect-error override global for the test
-  globalThis.fetch = fn;
+  globalThis.fetch = fn as unknown as typeof fetch;
   return fn as unknown as jest.Mock;
 }
 

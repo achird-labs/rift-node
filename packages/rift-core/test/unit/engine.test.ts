@@ -569,8 +569,7 @@ describe('rift.connect — blank apiKey is rejected before any request (issue #9
     const { rift } = await import('../../src/index.js');
     const { InvalidDefinition } = await import('../../src/errors.js');
     const fetchMock = jest.fn(async () => new Response('{}', { status: 200 }));
-    // @ts-expect-error override global for the test
-    globalThis.fetch = fetchMock;
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
 
     await expect(rift.connect('http://localhost:2525', { apiKey: '' })).rejects.toThrow(
       InvalidDefinition

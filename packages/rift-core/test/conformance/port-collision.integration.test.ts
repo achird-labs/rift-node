@@ -53,6 +53,7 @@ describeEmbeddedOrSkip('#72 — replay survives a host port collision (real cdyl
       await using engine = await rift.embedded();
       const fixture: Fixture = {
         name: 'collision',
+        requires: [],
         imposterJson: JSON.stringify({
           port, // deliberately collides with the squatter above
           protocol: 'http',

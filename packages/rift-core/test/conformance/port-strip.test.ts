@@ -26,7 +26,7 @@ function fakeEngine(captured: Created[]): RiftEngine {
 }
 
 function fixture(imposter: Record<string, unknown>): Fixture {
-  return { name: 'port-strip', imposterJson: JSON.stringify(imposter), interactions: [] };
+  return { name: 'port-strip', imposterJson: JSON.stringify(imposter), interactions: [], requires: [] };
 }
 
 const STUBS = [{ predicates: [{ equals: { path: '/x' } }], responses: [{ is: { statusCode: 200 } }] }];

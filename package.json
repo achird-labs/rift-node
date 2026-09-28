@@ -14,6 +14,7 @@
     "test:embedded": "npm run test:embedded -w @rift-vs/rift",
     "lint": "npm run lint -w @rift-vs/rift && npm run lint -w @rift-vs/rift-embedded",
     "typecheck": "npm run typecheck -w @rift-vs/rift",
+    "typecheck:tests": "npm run typecheck:tests -w @rift-vs/rift && npm run typecheck:tests -w @rift-vs/rift-embedded",
     "typecheck:examples": "npm run typecheck:examples -w @rift-vs/rift",
     "docs:check": "npm run docs:check -w @rift-vs/rift"
   }

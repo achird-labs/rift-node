@@ -28,8 +28,7 @@ function mockFetch(response: Response | Error): jest.Mock {
     if (response instanceof Error) throw response;
     return response;
   });
-  // @ts-expect-error override global for the test
-  globalThis.fetch = fn;
+  globalThis.fetch = fn as unknown as typeof fetch;
   return fn as unknown as jest.Mock;
 }
 
