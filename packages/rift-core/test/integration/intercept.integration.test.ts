@@ -167,6 +167,12 @@ describeSpawnOrSkip('intercept — spawn lane (real Rift engine binary)', () => 
 
     await icpt.serve('api.example.com', okJson({ stub: true }));
     expect(await icpt.rules()).toHaveLength(1);
+
+    // Unlike imposter stubs, a rule's `statusCode` lists back as a number even when posted as a
+    // numeric string: the rule store holds a u16 (issue #155). `addRule` sends it verbatim.
+    await icpt.addRule({ host: 'teapot.example.com', action: { serve: { statusCode: '418' as unknown as number } } });
+    const teapot = (await icpt.rules()).find((r) => r.host === 'teapot.example.com');
+    expect(teapot).toMatchObject({ action: { serve: { statusCode: 418 } } });
   }, 45_000);
 
   it('rift.spawn({}) (no intercept) → engine.intercept() rejects with the documented guidance', async () => {

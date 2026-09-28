@@ -19,6 +19,7 @@ import {
   WireValidationError,
   type Imposter,
   type ImpostersConfig,
+  type IsResponse,
   type ServeStub,
 } from '../../src/model/index.js';
 import { makeJsonSafeReplacer, stringifyJsonSafe } from '../../src/model/serialize.js';
@@ -33,6 +34,11 @@ describe('model types — compile-time pins (issue #160)', () => {
   it('ServeStub.headers admits a multi-value header (issue #144)', () => {
     const headers: ServeStub['headers'] = { 'Set-Cookie': ['a=1', 'b=2'] };
     expect(headers).toEqual({ 'Set-Cookie': ['a=1', 'b=2'] });
+  });
+
+  it('IsResponse.statusCode admits the string the engine reads back (issue #155)', () => {
+    const readBack: IsResponse = { statusCode: '201' };
+    expect(readBack.statusCode).toBe('201');
   });
 });
 
