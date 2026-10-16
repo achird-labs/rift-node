@@ -693,9 +693,8 @@ interface ImposterBuilder {
   stub(...stubs: Array<StubBuilder | wire.Stub>): this;
   scenario(s: ScenarioBuilder): this;       // appends s.build() stubs
   // _rift config
-  flowState(cfg: { backend?: 'inmemory' | 'redis'; ttlSeconds?: number;
-                   flowIdSource?: 'imposter_port' | `header:${string}`;
-                   redis?: { url: string; poolSize?: number; keyPrefix?: string } }): this;
+  flowState(cfg: { backend?: 'inmemory'; ttlSeconds?: number;
+                   flowIdSource?: 'imposter_port' | `header:${string}` }): this;
   flowIdFromHeader(name: string): this;     // sugar: flowIdSource: `header:${name}`
   /** @deprecated */ metrics(port?: number): this;  // no effect: metrics are process-wide (SpawnOptions.metricsPort);
                                                    // >= 0.18.0 reports config_key_ignored

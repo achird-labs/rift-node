@@ -132,7 +132,7 @@ export class UnsupportedPredicateError extends RiftError {
  * and honoring it silently would misrepresent the server's behavior — e.g. `impostersRepository`
  * (a Node in-process module the native engine cannot load) or `redis` (meaningful only to such a
  * module). Failing loud beats a silent in-memory fallback: the message names the option and the
- * supported alternative (`datadir`, per-imposter `flowState`).
+ * supported alternative (`datadir`, a sticky load balancer).
  */
 export class UnsupportedCreateOptionError extends RiftError {
   readonly option: string;

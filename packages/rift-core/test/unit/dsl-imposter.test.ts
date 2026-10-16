@@ -140,21 +140,17 @@ describe('DSL #24 — imposter metadata', () => {
 describe('DSL #24 — _rift config', () => {
   it('flowState(cfg) passes through into _rift.flowState (undefined omitted)', () => {
     const imp = imposter('s')
-      .flowState({ backend: 'redis', ttlSeconds: 600, redis: { url: 'redis://localhost:6379' } })
+      .flowState({ backend: 'inmemory', ttlSeconds: 600, flowIdSource: undefined })
       .build();
-    expect(imp._rift?.flowState).toEqual({
-      backend: 'redis',
-      ttlSeconds: 600,
-      redis: { url: 'redis://localhost:6379' },
-    });
+    expect(imp._rift?.flowState).toEqual({ backend: 'inmemory', ttlSeconds: 600 });
   });
   it('flowIdFromHeader merges flowIdSource into one _rift.flowState block', () => {
     const imp = imposter('s')
-      .flowState({ backend: 'redis' })
+      .flowState({ backend: 'inmemory' })
       .flowIdFromHeader('X-Flow-Id')
       .build();
     expect(imp._rift?.flowState).toEqual({
-      backend: 'redis',
+      backend: 'inmemory',
       flowIdSource: 'header:X-Flow-Id',
     });
   });
@@ -188,10 +184,10 @@ describe('DSL #24 — _rift config', () => {
   });
   it('multiple flowState() calls merge, preserving earlier keys', () => {
     const imp = imposter('s')
-      .flowState({ backend: 'redis' })
+      .flowState({ backend: 'inmemory' })
       .flowState({ ttlSeconds: 600 })
       .build();
-    expect(imp._rift?.flowState).toEqual({ backend: 'redis', ttlSeconds: 600 });
+    expect(imp._rift?.flowState).toEqual({ backend: 'inmemory', ttlSeconds: 600 });
   });
   it('multiple scriptEngine() calls merge, preserving earlier keys', () => {
     const imp = imposter('s')
@@ -306,7 +302,7 @@ describe('DSL #24 — full example round-trips', () => {
       .https({ mutualAuth: true })
       .record()
       .flowIdFromHeader('X-Flow-Id')
-      .flowState({ backend: 'redis', redis: { url: 'redis://localhost:6379' }, ttlSeconds: 600 })
+      .flowState({ backend: 'inmemory', ttlSeconds: 600 })
       .scriptEngine({ defaultEngine: 'rhai', timeoutMs: 2000 })
       .registerScript('approve', Script.rhaiFile('scripts/approve.rhai'))
       .stub(onPost('/pay').willReturn(script(Script.ref('approve'))))
