@@ -324,9 +324,28 @@ describe('wire model — preserves unknown / _rift extension fields verbatim', (
         {
           port: 3000,
           protocol: 'http',
-          _rift: { flowState: { backend: 'redis', ttlSeconds: 60 } },
+          _rift: { flowState: { backend: 'inmemory', ttlSeconds: 60 } },
           stubs: [{ predicates: [], responses: [], _verify: { sequence: [1, 2] } }],
           somethingFutureTheEngineAdds: true,
+        },
+      ],
+    };
+    expect(toWireJson(fromJson(input))).toEqual(input);
+  });
+
+  it('still validates and round-trips a leftover _rift.flowState.redis block (the engine decodes it)', () => {
+    const input = {
+      imposters: [
+        {
+          port: 3001,
+          protocol: 'http',
+          _rift: {
+            flowState: {
+              backend: 'redis',
+              ttlSeconds: 60,
+              redis: { url: 'redis://localhost:6379', poolSize: 4, keyPrefix: 'rift:' },
+            },
+          },
         },
       ],
     };
@@ -390,7 +409,7 @@ describe('wire model — comprehensive grammar round-trip + camelCase emission',
         strictBehaviors: true,
         defaultResponse: { statusCode: 404, body: 'nope' },
         defaultForward: 'http://upstream.local',
-        _rift: { flowState: { backend: 'redis', ttlSeconds: 60 }, scripts: { s1: { code: 'x' } } },
+        _rift: { flowState: { backend: 'inmemory', ttlSeconds: 60 }, scripts: { s1: { code: 'x' } } },
         futureImposterKey: { anything: [1, 2] },
         stubs: [
           {

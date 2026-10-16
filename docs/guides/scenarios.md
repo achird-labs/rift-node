@@ -99,10 +99,10 @@ calls add/override individual keys, earlier keys survive), so `flowState(...)` a
 `'imposter_port'` — one flow for the whole imposter — or `` `header:${name}` `` — deriving the
 flow id from a request header, so each caller that sends a distinct `X-Flow-Id` gets its own
 scenario state, verification journal, and response-cycle position on the same running imposter.
-`redis: { url, poolSize?, keyPrefix? }` moves the backend to Redis for state shared across
-multiple Rift processes (see
-[Migrating from Mountebank §Persistence](../mountebank/migration.md#persistence--distributed-state)
-for when you'd reach for that over a sticky load balancer).
+Flow state lives in the engine's memory; there is no shared backend (the Redis backend was removed
+in engine 0.22.0). To run several Rift processes, pin each flow to one node with a sticky load
+balancer (see
+[Migrating from Mountebank §Persistence](../mountebank/migration.md#persistence--distributed-state)).
 
 ### Writing flow state declaratively
 

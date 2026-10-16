@@ -250,16 +250,14 @@ one, so `create({ impostersRepository })` / `create({ redis })` **throws
 server. Migrate a repository-backed deployment as follows:
 
 - **Restart persistence** (imposters survive a bounce) → `datadir`, as above.
-- **Distributed scenario / flow state** (shared across instances) → per-imposter
-  `_rift.flowState.backend: "redis"` with a `redis: { url }` block — via the DSL's
-  `flowState({ backend: 'redis', redis: { url } })`. This is imposter-scoped state, not an imposter
-  *store*.
+- **Distributed scenario / flow state** (shared across instances) has no equivalent: the engine's
+  Redis flow-state backend was removed in 0.22.0 (rift#1336). Use the sticky-load-balancer option
+  below.
 - **Multi-instance without shared state** → run independent Rift nodes behind a **sticky/affinity
   load balancer keyed on the flow id** (`flowState({ flowIdSource: 'header:X-Flow-Id' })`, or the
   `flowIdFromHeader('X-Flow-Id')` sugar). When each logical flow — a test run, a session, a tenant —
   pins to one node, scenario state, response cycling, and request verification are all already
-  correct per-node, with no shared infrastructure and no cluster code. This, rather than rebuilding
-  a Redis imposter repository, is the recommended replacement for a Redis-synced Mountebank fleet;
+  correct per-node, with no shared infrastructure and no cluster code. This is the recommended replacement for a Redis-synced Mountebank fleet;
   it stops working only when a single flow genuinely sprays across nodes.
 - **Multi-instance imposter-CRUD sync** (one process's `POST /imposters` becoming visible on another
   — the pub/sub half of a custom Redis repository) is a **non-goal**: Rift provides no cross-instance

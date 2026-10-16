@@ -2,7 +2,7 @@
  * Fluent imposter builder.
  *
  * `build()` emits every field only when it actually carries content — the same "absent ≠
- * empty" discipline as {@link ResponseBuilder}: no stray `_rift: {}`, no `redis: undefined`.
+ * empty" discipline as {@link ResponseBuilder}: no stray `_rift: {}`, no `ttlSeconds: undefined`.
  * `_rift.flowState` is a single accumulating block — `flowState()` and `flowIdFromHeader()`
  * shallow-merge into it across calls, so config built up over several chained calls still
  * lands as one object on the wire. `scenario()` flattens the {@link ScenarioBuilder}'s stubs
@@ -18,10 +18,9 @@ import { StubBuilder, type AnyStubBuilder } from './stub.js';
 import type { ScenarioBuilder } from './scenario.js';
 
 export interface FlowStateConfig {
-  backend?: 'inmemory' | 'redis';
+  backend?: 'inmemory';
   ttlSeconds?: number;
   flowIdSource?: 'imposter_port' | `header:${string}`;
-  redis?: { url: string; poolSize?: number; keyPrefix?: string };
 }
 
 export interface ScriptEngineConfig {

@@ -52,8 +52,8 @@ export interface CreateOptions {
   /**
    * Mountebank custom-repository Redis config. **Not supported** — only a custom
    * {@link impostersRepository} consumes it, which Rift does not support, so `create()` throws
-   * {@link UnsupportedCreateOptionError}. For distributed scenario state use per-imposter
-   * `flowState()`; see `docs/migration.md`.
+   * {@link UnsupportedCreateOptionError}. Scenario state is per-imposter (`flowState()`); see
+   * `docs/migration.md`.
    */
   redis?: RedisOptions;
 }

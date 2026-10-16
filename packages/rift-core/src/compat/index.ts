@@ -111,7 +111,7 @@ function rejectUnsupportedOptions(options: CreateOptions): void {
       'impostersRepository',
       "create({ impostersRepository }) is not supported: Rift's engine is a native binary and " +
         'cannot load a Node repository module. Use `datadir` for imposter persistence and ' +
-        'per-imposter `_rift.flowState` (the DSL `flowState()`) for distributed scenario state. ' +
+        'per-imposter `_rift.flowState` (the DSL `flowState()`) for scenario state. ' +
         'See docs/migration.md "Persistence & distributed state".'
     );
   }
@@ -119,8 +119,9 @@ function rejectUnsupportedOptions(options: CreateOptions): void {
     throw new UnsupportedCreateOptionError(
       'redis',
       'create({ redis }) is not supported: it only configures a custom impostersRepository, which ' +
-        "Rift does not support. For distributed flow state use per-imposter " +
-        "`_rift.flowState.backend: 'redis'` (the DSL `flowState()`). " +
+        'Rift does not support, and the engine no longer has a Redis flow-state backend. For ' +
+        'multi-instance setups pin each flow to one node with a sticky load balancer keyed on the ' +
+        "flow id (per-imposter `flowState({ flowIdSource: 'header:X-Flow-Id' })`). " +
         'See docs/migration.md "Persistence & distributed state".'
     );
   }

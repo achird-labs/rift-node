@@ -5,6 +5,15 @@ All notable changes to `@rift-vs/rift` are documented here. This project adheres
 
 ## Unreleased
 
+### Removed
+
+- **The Redis flow-state option** (issue #190). `flowState()` no longer accepts `backend: 'redis'`
+  or a `redis: { url, poolSize?, keyPrefix? }` block (engine 0.22.0 removed the backend, rift#1336).
+  `fromJson` still validates and round-trips a document that carries a leftover
+  `_rift.flowState.redis`, since the engine still decodes it. The `create({ redis })` rejection
+  message no longer points at a Redis backend. To share flows across nodes, pin each flow to one node
+  with a sticky load balancer.
+
 ## 0.16.0 — 2026-09-28
 
 Everything since 0.15.0. The 0.15.1 and 0.15.2 patches were cut automatically after engine bumps

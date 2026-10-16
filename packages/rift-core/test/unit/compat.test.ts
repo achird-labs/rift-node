@@ -314,7 +314,7 @@ describe('issue #76 — create() fails loud on options it cannot honor (no silen
     expect(resolve).not.toHaveBeenCalled();
   });
 
-  it('rejects redis before spawning, pointing at per-imposter flowState', async () => {
+  it('rejects redis before spawning, pointing at flowState-based affinity', async () => {
     const { deps, spawn } = spyDeps();
 
     const err = await create(
